@@ -64,9 +64,20 @@ Grab the latest pre-compiled archive from the [Releases](https://github.com/gian
 Download my verified full shader cache archive:
 - 🔗 **Google Drive Shader Cache:** [Download Full Shader Pack](https://drive.google.com/file/d/1pa3T-D7lTcuo9B1RHP1HoejbtdUDqS6O/view)
 
-Extract the shader files directly into:
+Extract the downloaded shader files directly into the emulator's shader cache directory:
 ```text
-user/cache/shader/0400486024dec000/
+lichii-zerostutter-win64/
+├── Play-Fritchii-5.3-Boost.cmd
+├── nx2_switches.txt
+├── lichii.exe
+└── user/
+    └── cache/
+        └── shader/
+            └── 0400486024dec000/    <--- EXTRACT ALL SHADER FILES HERE
+                ├── vulkan.fork-v53.bin
+                ├── warm-graphics.bin
+                ├── warm-compute.bin
+                └── vulkan_static_pipelines.bin
 ```
 
 ### Step 3: Launch with Boost
@@ -75,6 +86,21 @@ Double-click:
 Play-Fritchii-5.3-Boost.cmd
 ```
 All RTX 3070 / Ryzen 5800X3D boost environment variables will be injected automatically, and your game will boot with 100% pre-loaded pipelines at a locked 60 FPS.
+
+---
+
+## ⚙️ CPU Core & Thread Tuning (For 6-Core & 4-Core Users)
+
+By default, the launcher is tuned for an **8-Core / 16-Thread** CPU (`EDEN_NX2_WARM_THREADS=6`). If your processor has fewer cores, adjust the thread count in `Play-Fritchii-5.3-Boost.cmd` (or `nx2_switches.txt`) to avoid CPU starvation:
+
+| CPU Cores / Threads | Example Processors | Recommended `WARM_THREADS` |
+| :--- | :--- | :---: |
+| **8 Cores / 16 Threads** | AMD Ryzen 7 5800X3D / Intel Core i7-13700 | **`6`** *(Default)* |
+| **6 Cores / 12 Threads** | AMD Ryzen 5 5600X / Intel Core i5-12400 | **`4`** |
+| **4 Cores / 8 Threads** | Intel Core i3-12100 / AMD Ryzen 3 3300X | **`2`** |
+
+> [!TIP]
+> Setting `WARM_THREADS=4` (on 6-core) or `WARM_THREADS=2` (on 4-core) leaves enough dedicated physical cores free for ARM64 CPU execution, GPU draw submission (`EDEN_NX2_SPLIT=2`), and audio processing, eliminating startup audio crackling and thread contention.
 
 ---
 
