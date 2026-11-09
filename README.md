@@ -13,7 +13,7 @@ This is a personal, independent public fork of **Fritchii v5.3 / Lichii**, custo
 > - **CPU:** AMD Ryzen 7 5800X3D (8 Cores / 16 Threads, 96 MB 3D V-Cache)
 > - **GPU:** NVIDIA GeForce RTX 3070 (8 GB VRAM)
 > - **RAM:** 32 GB DDR4
-> - **OS:** Windows 11 64-bit
+> - **OS:** Windows 10 64-bit
 >
 > If you have an NVIDIA RTX card and a modern high-cache CPU on Windows, this fork eliminates the notorious combat stutters (sword slashing, pot smashing, enemy attacks) and traversal hitches experienced with stock builds.
 
