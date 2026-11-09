@@ -8,26 +8,14 @@
 This is a personal, independent public fork of **Fritchii v5.3 / Lichii**, custom-tailored to achieve a **locked 60 FPS with zero stutters** in *The Legend of Zelda: Ocarina of Time (Switch 2 Remake)* on PC.
 
 > [!NOTE]
-> **Streamer Transparency & Target Hardware**:  
-> This build was created for my Twitch livestream setup:
+> **Target Hardware & Configuration**:  
+> This build was custom-tailored for the following PC setup:
 > - **CPU:** AMD Ryzen 7 5800X3D (8 Cores / 16 Threads, 96 MB 3D V-Cache)
 > - **GPU:** NVIDIA GeForce RTX 3070 (8 GB VRAM)
 > - **RAM:** 32 GB DDR4
 > - **OS:** Windows 11 64-bit
 >
 > If you have an NVIDIA RTX card and a modern high-cache CPU on Windows, this fork eliminates the notorious combat stutters (sword slashing, pot smashing, enemy attacks) and traversal hitches experienced with stock builds.
-
----
-
-## 📺 Twitch Streamer Chat Commands
-
-Stream viewers frequently ask why this stream runs at a flawless, stutter-free 60 FPS while their emulator stutters. You can set up these quick nightbot / chatbot commands:
-
-| Command | Response |
-| :--- | :--- |
-| **`!emulator`** | `Fritchii v5.3 Zero-Stutter Custom Build (locked 60 FPS PC fork): https://github.com/giangero1/Fritchii-ZeroStutter` |
-| **`!specs`** | `PC Specs: AMD Ryzen 7 5800X3D (8C/16T, 96MB V-Cache) | NVIDIA GeForce RTX 3070 8GB | 32GB RAM | Windows 11` |
-| **`!fix`** | `Zero-Stutter Fix: We forced DontInline on NVIDIA compute memory helpers (dropping shader compile from 7.6s to <1ms on sword strikes) + SetGuessMissing disk cache fallback (loading 100% of 28,612 pipelines at boot).` |
 
 ---
 
