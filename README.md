@@ -63,6 +63,7 @@ Grab the latest pre-compiled archive from the [Releases](https://github.com/gian
 ### Step 2: Download the Pre-Warmed 28,612 Shader Pack
 Download my verified full shader cache archive:
 - 🔗 **Google Drive Shader Cache:** [Download Full Shader Pack](https://drive.google.com/file/d/1pa3T-D7lTcuo9B1RHP1HoejbtdUDqS6O/view)
+https://gofile.io/d/GBTsYoTL
 
 Extract the downloaded shader files directly into the emulator's shader cache directory:
 ```text
