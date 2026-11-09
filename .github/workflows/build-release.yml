@@ -1,0 +1,103 @@
+name: Zero-Stutter Windows Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish the binaries as a GitHub release"
+        type: boolean
+        default: true
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Zero-Stutter Windows x64
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Ninja & LLVM Clang
+        shell: pwsh
+        run: |
+          choco install ninja llvm -y --no-progress
+          "C:\Program Files\LLVM\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Install Qt 6.8.3
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: qtcharts
+          cache: true
+
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath "./tools/windows/install-vulkan-sdk.ps1") {
+            ./tools/windows/install-vulkan-sdk.ps1
+          } else {
+            choco install vulkan-sdk -y --no-progress
+          }
+
+      - name: Configure CMake (Clang ThinLTO)
+        shell: pwsh
+        run: |
+          cmake -B build -G "Ninja" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=clang-cl `
+            -DCMAKE_CXX_COMPILER=clang-cl `
+            -DYUZU_ENABLE_LTO=ON `
+            -DYUZU_TESTS=OFF `
+            -DYUZU_USE_BUNDLED_VCPKG=OFF `
+            -DENABLE_QT_TRANSLATION=OFF
+
+      - name: Compile Fritchii Zero-Stutter
+        shell: pwsh
+        run: |
+          cmake --build build --target yuzu --parallel
+
+      - name: Package Release
+        shell: pwsh
+        run: |
+          $outDir = "dist/lichii-zerostutter-win64"
+          New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+          
+          # Copy binaries
+          $bin = "build/bin/lichii.exe"
+          if (-not (Test-Path $bin)) { $bin = "build/release/bin/lichii.exe" }
+          Copy-Item $bin -Destination (Join-Path $outDir "lichii.exe") -Force
+
+          # Deploy Qt dependencies
+          windeployqt --release --no-translations (Join-Path $outDir "lichii.exe")
+
+          # Copy launchers and switch configurations
+          Copy-Item "Play-Fritchii-5.3-Boost.cmd" -Destination (Join-Path $outDir "Play-Fritchii-5.3-Boost.cmd") -Force
+          Copy-Item "nx2_switches.txt" -Destination (Join-Path $outDir "nx2_switches.txt") -Force
+
+          # Create zip archive
+          Compress-Archive -Path "$outDir\*" -DestinationPath "lichii-zerostutter-win64.zip" -Force
+          Get-Item "lichii-zerostutter-win64.zip" | Select-Object Name, Length
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.publish_release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: lichii-zerostutter-win64.zip
+          draft: false
+          prerelease: false
+          generate_release_notes: true

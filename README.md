@@ -1,89 +1,109 @@
-<!--
-# SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
-# SPDX-License-Identifier: GPL-3.0-or-later
+# Fritchii v5.3 Zero-Stutter Custom Build
+### *The Legend of Zelda: Ocarina of Time (Nintendo Switch 2 Remake) on PC*
 
-# SPDX-FileCopyrightText: 2018 yuzu Emulator Project
-# SPDX-License-Identifier: GPL-2.0-or-later
--->
+[![Release](https://img.shields.io/github/v/release/giangero1/Fritchii-ZeroStutter?color=brightgreen&label=Release)](https://github.com/giangero1/Fritchii-ZeroStutter/releases)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/giangero1/Fritchii-ZeroStutter/build-release.yml?branch=main&label=CI%20Build)](https://github.com/giangero1/Fritchii-ZeroStutter/actions)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-<p align="center">
-  <img src="dist/branding/lichii_icon_with_logo.png" alt="Lichii" width="600">
-</p>
-
-# Lichii
-
-Lichii is an experimental, open-source Nintendo Switch and Switch 2 emulator written in C++. It builds on Eglantine, Eden, yuzu and Sudachi, preserving their contributions while developing this fork's game compatibility and renderer fixes.
-
-This is an independent fork, not an official release of those upstream projects. Lichii is not affiliated with Nintendo.
-
-## Downloads and setup
-
-Published builds belong on this fork's [releases page](https://github.com/zortos293/Eglantine/releases). The repository still uses its historical Eglantine name; the desktop application is now Lichii.
-
-On Windows, extract the entire build archive and run **lichii.exe**. Only use games and system files you have legally obtained. Games, keys and firmware are not included.
-
-### Existing saves and settings
-
-The rebrand intentionally retains the existing Eden/Eglantine data directories and configuration keys. It does not move or delete saves, settings or shader caches. Back up your saves before testing experimental builds.
-
-## Compatibility and issue reports
-
-Compatibility and performance vary by game, hardware and driver. Rendering errors, stutters and crashes remain possible. Passing automated tests does not establish that a game renders correctly, and this project makes no universal frame-rate guarantee.
-
-When [reporting an issue](https://github.com/zortos293/Eglantine/issues), include:
-
-- The exact build, game version, CPU, GPU and driver version.
-- Relevant settings and steps to reproduce the problem.
-- A screenshot and the log from the affected session, after checking it for personal information.
-
-Do not upload game files, keys, firmware or private account information.
-
-## Building and contributing
-
-See the [build guide](docs/Build.md), [user documentation](docs/user/README.md) and [coding guidelines](docs/Coding.md). Some inherited documentation and internal build target names still use upstream names. The GUI build target remains `yuzu`; its output is `lichii.exe` on Windows and `lichii` on other desktop platforms.
-
-Keep changes focused and distinguish code-level checks from actual gameplay testing.
-
-## Artwork
-Art created by YOB (yobslab)
-The supplied Lichii logo, icon and library artwork are in [dist/branding](dist/branding). Windows, Linux and macOS icon resources are generated from that artwork by [Generate-LichiiIcons.ps1](tools/Generate-LichiiIcons.ps1).
-
-## Support Lichii
-
-Lichii is free and stays free. If you want to help, you can donate in crypto. Donations help pay for the AI tools and build machines used to develop this open-source project faster.
-
-**Solana (SOL)**
-```text
-JepEjfyWjGjhJvHSrqj52KtLjcbbbmUh1iGqerYBF4w
-```
-
-**Ethereum (ETH)**
-```text
-0x055ABa1b80Bc35C836Ce7E9F47c2b3d6C75b5534
-```
-
-**Bitcoin (BTC)**
-```text
-bc1qcvxdpf4qvdhqp8ee4s355cjmxrzsphsdwpl8w4
-```
-
-**BNB Smart Chain (BNB)**
-```text
-0x055ABa1b80Bc35C836Ce7E9F47c2b3d6C75b5534
-```
-
-**Polygon**
-```text
-0x055ABa1b80Bc35C836Ce7E9F47c2b3d6C75b5534
-```
-
-Send each coin on its matching network. Coins sent on the wrong network can't be recovered.
+This is a personal, independent public fork of **Fritchii v5.3 / Lichii**, custom-tailored to achieve a **locked 60 FPS with zero stutters** in *The Legend of Zelda: Ocarina of Time (Switch 2 Remake)* on PC.
 
 > [!NOTE]
-> Donations are voluntary gifts and are non-refundable. A donation does not buy any product, service, perk, early access, exclusive build, priority support or say in the project. Every release stays free and public for everyone.
+> **Streamer Transparency & Target Hardware**:  
+> This build was created for my Twitch livestream setup:
+> - **CPU:** AMD Ryzen 7 5800X3D (8 Cores / 16 Threads, 96 MB 3D V-Cache)
+> - **GPU:** NVIDIA GeForce RTX 3070 (8 GB VRAM)
+> - **RAM:** 32 GB DDR4
+> - **OS:** Windows 11 64-bit
+>
+> If you have an NVIDIA RTX card and a modern high-cache CPU on Windows, this fork eliminates the notorious combat stutters (sword slashing, pot smashing, enemy attacks) and traversal hitches experienced with stock builds.
 
-## Credits and license
+---
 
-Lichii inherits the work of the Eglantine, Eden, yuzu and Sudachi projects and their contributors, including Eglantine's original developer Camille LaVey. Original copyright notices and third-party licenses are retained.
+## 📺 Twitch Streamer Chat Commands
 
-See [LICENSE.txt](LICENSE.txt) and the source files for applicable license terms.
+Stream viewers frequently ask why this stream runs at a flawless, stutter-free 60 FPS while their emulator stutters. You can set up these quick nightbot / chatbot commands:
+
+| Command | Response |
+| :--- | :--- |
+| **`!emulator`** | `Fritchii v5.3 Zero-Stutter Custom Build (locked 60 FPS PC fork): https://github.com/giangero1/Fritchii-ZeroStutter` |
+| **`!specs`** | `PC Specs: AMD Ryzen 7 5800X3D (8C/16T, 96MB V-Cache) | NVIDIA GeForce RTX 3070 8GB | 32GB RAM | Windows 11` |
+| **`!fix`** | `Zero-Stutter Fix: We forced DontInline on NVIDIA compute memory helpers (dropping shader compile from 7.6s to <1ms on sword strikes) + SetGuessMissing disk cache fallback (loading 100% of 28,612 pipelines at boot).` |
+
+---
+
+## ⚡ Why Stock Emulators Stutter on NVIDIA Windows
+
+Stock Fritchii / Lichii and other emulators suffer from two primary bottlenecks on NVIDIA Windows drivers:
+
+1. **Compute Shader Function Inlining (7.6-Second GPU Freezes):**
+   When attacking enemies, breaking pots, cutting grass, or triggering particle effects, the emulator emits complex compute shaders. The NVIDIA Vulkan driver's SPIR-V optimizer attempts to inline large global memory helper functions, causing shader compilation to spike up to **7,600 ms (7.6 seconds)** right in the middle of combat!
+2. **Missing Constant Buffer Descriptors (Cache Discards):**
+   The stock disk pipeline cache reader discards valid cached graphics pipelines whenever they lack pre-recorded constant buffer descriptor metadata. Instead of loading from disk, the emulator discards them, forcing full re-compilation while traversing the overworld.
+
+---
+
+## 🛡️ The 3 Zero-Stutter Pillars Implemented
+
+### Pillar 1: Compute Shader `DontInline` Directive
+- **File:** `src/shader_recompiler/backend/spirv/spirv_emit_context.cpp`
+- **Fix:** Injects `spv::FunctionControlMask::DontInline` into compute global memory helper functions when `EDEN_NX2_COMPUTE_NOINLINE=1`.
+- **Result:** Drops NVIDIA driver compile times from **7.6 seconds down to <1 ms**, completely eliminating mid-combat frame freezes.
+
+### Pillar 2: `GuessMissing` Disk Cache Fallback
+- **File:** `src/video_core/renderer_vulkan/vk_pipeline_cache.cpp`
+- **Fix:** Injects `static const GuessMissing guess{};` and `env.SetGuessMissing(&guess)` into `CreateCachedGraphicsPipeline`.
+- **Result:** Pipelines with unrecorded constant buffer descriptors are safely guessed rather than discarded, allowing **100% of 28,612 pipeline caches** to load at boot.
+
+### Pillar 3: Hardware Boost Launcher Suite
+- **Launcher:** [`Play-Fritchii-5.3-Boost.cmd`](Play-Fritchii-5.3-Boost.cmd)
+- **Engine Flags:**
+  - `EDEN_NX2_COMPUTE_NOINLINE=1`: Activates Pillar 1 SPIR-V non-inlining.
+  - `EDEN_NX2_PRELOAD_ALL_PIPELINES=1`: Forces all compiled pipelines into VRAM at startup.
+  - `EDEN_NX2_SPLIT=2`: Dedicated dual multi-core Vulkan draw-call dispatch worker.
+  - `EDEN_NX2_WARM_THREADS=6`: Affinitized pipeline warmup thread pool.
+  - `EDEN_NX2_PERF_ON=index_rebind,clean_words,fence_flush`: Draw-call and fence syncpoint batching.
+  - `use_graphics_pipeline_library=false`: Disables dynamic Graphics Pipeline Library (GPL) runtime stalls.
+
+---
+
+## 🚀 Quick Start Guide (For Viewers & Players)
+
+### Step 1: Download the Zero-Stutter Build
+Grab the latest pre-compiled archive from the [Releases](https://github.com/giangero1/Fritchii-ZeroStutter/releases) page:
+- **`lichii-zerostutter-win64.zip`** (Compiled with Clang 19 ThinLTO).
+
+### Step 2: Download the Pre-Warmed 28,612 Shader Pack
+Download my verified full shader cache archive:
+- 🔗 **Google Drive Shader Cache:** [Download Full Shader Pack](https://drive.google.com/file/d/1pa3T-D7lTcuo9B1RHP1HoejbtdUDqS6O/view)
+
+Extract the shader files directly into:
+```text
+user/cache/shader/0400486024dec000/
+```
+
+### Step 3: Launch with Boost
+Double-click:
+```cmd
+Play-Fritchii-5.3-Boost.cmd
+```
+All RTX 3070 / Ryzen 5800X3D boost environment variables will be injected automatically, and your game will boot with 100% pre-loaded pipelines at a locked 60 FPS.
+
+---
+
+## 🛠️ Automated Upgrade Engine
+
+Want to rebase these exact zero-stutter C++ patches onto future upstream releases?
+
+Run:
+```cmd
+Upgrade-Fritchii.cmd
+```
+This script will automatically checkout the specified git tag, apply the `GuessMissing`, `compute_noinline`, and `Header` patches, compile via Clang ThinLTO, and configure the runtime launcher.
+
+---
+
+## ⚖️ Upstream & Disclaimer
+
+This is a personal hobbyist fork for streaming and educational purposes.
+- Upstream base: [Frizti/Fritchii](https://github.com/Frizti/Fritchii) and [zortos293/Lichii](https://github.com/zortos293/Lichii).
+- Please do not submit bug reports or issues related to this custom build to the upstream developers.

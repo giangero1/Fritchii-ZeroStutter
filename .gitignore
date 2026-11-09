@@ -67,3 +67,21 @@ vulkansdk*.exe
 
 # Build-time generated external sources
 externals/generated
+
+# Local logs and development artifacts
+*.log
+portable-hybrid*/
+.tools/
+build_lichii.cmd
+tools/__pycache__/
+
+tools/build-pgo*
+tools/train-pgo*
+tools/capture-stutter*
+tools/start-stutter*
+tools/prepare-stutter*
+tools/repair-stock*
+tools/package-hybrid*
+tools/stutter_report*
+tools/tests/
+
