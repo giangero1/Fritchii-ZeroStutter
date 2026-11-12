@@ -47,7 +47,8 @@ Welcome to **Fritchii v5.8.4 Zero-Stutter**, an updated personal build featuring
 ## 💾 Pre-Warmed 28,612 Shader Cache
 
 To ensure you experience zero shader compilation hitches from the very first second:
-- 🔗 **Google Drive Shader Pack:** [Download Verified 28,612 Shaders](https://drive.google.com/file/d/1pa3T-D7lTcuo9B1RHP1HoejbtdUDqS6O/view)
+- 🔗 **Primary Mirror (Google Drive):** [Download Verified 28,612 Shaders](https://drive.google.com/file/d/1pa3T-D7lTcuo9B1RHP1HoejbtdUDqS6O/view)
+- 🔗 **Alternative Mirror (Gofile):** [Download via Gofile Mirror](https://gofile.io/d/GBTsYoTL)
 
 Extract the shader files directly into:
 ```text
