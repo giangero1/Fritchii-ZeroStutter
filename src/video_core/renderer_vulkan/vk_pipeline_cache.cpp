@@ -6199,11 +6199,13 @@ std::string PipelineShaders(const GraphicsPipelineCacheKey& key) {
 std::unique_ptr<GraphicsPipeline> PipelineCache::CreateCachedGraphicsPipeline(
     const GraphicsPipelineCacheKey& key, std::vector<std::vector<FileEnvironment>>& records,
     PipelineStatistics* statistics) {
+    static const GuessMissing guess{};
     ShaderPools pools;
     for (auto& envs : records) {
         pools.ReleaseContents();
         boost::container::static_vector<Shader::Environment*, 5> env_ptrs;
         for (auto& env : envs) {
+            env.SetGuessMissing(&guess);
             env_ptrs.push_back(&env);
         }
         if (auto pipeline{CreateGraphicsPipeline(pools, key, MakeSpan(env_ptrs), statistics, false)}) {
