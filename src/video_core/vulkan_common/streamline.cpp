@@ -126,6 +126,7 @@ std::vector<std::filesystem::path> SearchDirs() {
     }
     dirs.push_back(UserFolder());
     dirs.push_back(Common::FS::GetExeDirectory() / "streamline");
+    dirs.push_back(Common::FS::GetExeDirectory());
     return dirs;
 }
 
@@ -396,16 +397,23 @@ bool ResolveFeature(const Api& api, sl::Feature feature, const char* name, T*& f
     return function != nullptr;
 }
 
+bool HasOpenDlssg() {
+    return std::filesystem::exists("nvngx_dlssg.dll") ||
+           std::filesystem::exists("user/streamline/nvngx_dlssg.dll") ||
+           std::filesystem::exists("streamline/nvngx_dlssg.dll") ||
+           std::filesystem::exists("version.dll") ||
+           std::filesystem::exists("opendlssg.ini") ||
+           std::filesystem::exists("dlssg_to_fsr3_amd_is_better.dll");
+}
+
 /// Checks DLSS-G, Reflex and PCL on the attached device and fetches their functions.
 bool AttachFrameGen(State& state, const sl::AdapterInfo& adapter) {
     Api& api = state.api;
-    const bool has_opendlssg = std::filesystem::exists("nvngx_dlssg.dll") ||
-                               std::filesystem::exists("user/streamline/nvngx_dlssg.dll");
+    const bool has_opendlssg = HasOpenDlssg();
     for (const FrameGenFeature& entry : FRAME_GEN_FEATURES) {
         if (const sl::Result result = api.is_feature_supported(entry.feature, adapter);
             result != sl::Result::eOk) {
-            if (has_opendlssg && (result == sl::Result::eErrorFeatureNotSupported ||
-                                  static_cast<int>(result) == 32)) {
+            if (has_opendlssg) {
                 LOG_INFO(Render_Vulkan,
                          "Streamline: Bypassing hardware check for {} (result {}) using OpenDLSSG enabler",
                          entry.name, static_cast<int>(result));
@@ -512,10 +520,15 @@ DlssFiles FindDlssFiles() {
     // A Streamline module loads only with the sl.common.dll and loader of its own release.
     std::string streamline_version = files.interposer_version;
     for (const char* const name : FRAME_GEN_FILES) {
-        const std::filesystem::path path = files.folder / name;
+        std::filesystem::path path = files.folder / name;
         if (!std::filesystem::is_regular_file(path, ec)) {
-            files.frame_gen_missing.emplace_back(name);
-            continue;
+            const std::filesystem::path exe_path = Common::FS::GetExeDirectory() / name;
+            if (std::filesystem::is_regular_file(exe_path, ec)) {
+                path = exe_path;
+            } else {
+                files.frame_gen_missing.emplace_back(name);
+                continue;
+            }
         }
         if (!std::string_view{name}.starts_with("sl.")) {
             continue;
@@ -536,12 +549,7 @@ std::span<const char* const> FrameGenFiles() {
 
 bool FrameGenRequested() {
     return Settings::values.frame_gen_type.GetValue() == Settings::FrameGenType::NvidiaDlssG &&
-           VideoCore::BlockedDlssg({
-               .streamline = true,
-               .dlss = Settings::values.nvidia_dlss.GetValue(),
-               .program_id = Settings::GetCurrentProgramID(),
-               .loaded = true,
-           }) == VideoCore::DlssgBlock::None;
+           Settings::values.nvidia_dlss.GetValue();
 }
 
 bool Start(void* window) {
@@ -748,8 +756,7 @@ bool AttachDevice(VkInstance instance, VkPhysicalDevice physical, VkDevice devic
     sl::AdapterInfo adapter{};
     adapter.vkPhysicalDevice = physical;
     const sl::Result dlss_res = state.api.is_feature_supported(sl::kFeatureDLSS, adapter);
-    const bool has_opendlssg = std::filesystem::exists("nvngx_dlssg.dll") ||
-                               std::filesystem::exists("user/streamline/nvngx_dlssg.dll");
+    const bool has_opendlssg = HasOpenDlssg();
     if (dlss_res != sl::Result::eOk) {
         LOG_WARNING(Render_Vulkan,
                     "NVIDIA DLSS is not supported on this GPU or driver (Streamline result {}); "
