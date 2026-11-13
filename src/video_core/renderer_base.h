@@ -24,6 +24,27 @@ class GraphicsContext;
 
 namespace VideoCore {
 
+struct RendererDeviceInfo {
+    std::string model;
+    std::string driver;
+    std::string api;
+};
+
+enum class FrameGenState : u8 {
+    Pending,
+    Running,
+    UnsupportedRenderer,
+    UnsupportedBuild,
+    UnsupportedGpu,
+    UnsupportedSurface,
+    MissingLosslessDll,
+    NvidiaFrameGen,
+};
+
+struct FrameGenStatus {
+    FrameGenState state{FrameGenState::UnsupportedRenderer};
+    u64 generated_frames{};
+};
 struct DlssStatus {
     u64 evaluations{};
     /// The last evaluation's settings: the mode it ran in, and the mode and preset the user chose

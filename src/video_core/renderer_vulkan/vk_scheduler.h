@@ -88,6 +88,11 @@ public:
     void WaitWorker();
 
     void MarkFrameEnd(u64 frame);
+
+    /// Keeps the worker from executing chunks while the lock is held. Take it before submit_mutex.
+    [[nodiscard]] std::unique_lock<std::mutex> PauseWorker() {
+        return std::unique_lock{execution_mutex};
+    }
     void TraceGraphicsPipeline(const std::array<u64, 6>& hashes);
     void TraceComputePipeline(u64 hash);
     /// Worker thread, inside a recorded command: timestamps one draw or dispatch of a sampled

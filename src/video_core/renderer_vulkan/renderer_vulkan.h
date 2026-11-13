@@ -26,6 +26,9 @@
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
+#if defined(EGLANTINE_STREAMLINE) && !defined(HAS_LSFG)
+#include "video_core/vulkan_common/streamline.h"
+#endif
 
 namespace Core::Memory {
 class Memory;
@@ -59,6 +62,18 @@ public:
         return device.GetDriverName();
     }
 
+    [[nodiscard]] VideoCore::FrameGenStatus GetFrameGenStatus() const override {
+#ifdef HAS_LSFG
+        return frame_gen.CurrentStatus();
+#else
+#ifdef EGLANTINE_STREAMLINE
+        if (Streamline::FrameGenActive()) {
+            return {.state = VideoCore::FrameGenState::NvidiaFrameGen};
+        }
+#endif
+        return {.state = VideoCore::FrameGenState::UnsupportedBuild};
+#endif
+    }
 #ifdef EGLANTINE_STREAMLINE
     [[nodiscard]] VideoCore::DlssStatus GetDlssStatus() const override;
 #endif
@@ -76,6 +91,8 @@ private:
     VkCommandBuffer BeginSingleTimeCommands();
     void EndSingleTimeCommands(VkCommandBuffer command_buffer);
     void Report() const;
+    /// The surface the swapchain is made for, once the device exists.
+    VkSurfaceKHR PresentationSurface();
 
     vk::Buffer RenderToBuffer(std::span<const Tegra::FramebufferConfig> framebuffers,
                               const Layout::FramebufferLayout& layout, VkFormat format,

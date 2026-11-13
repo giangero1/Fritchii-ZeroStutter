@@ -185,6 +185,10 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "video_core/gpu.h"
 #include "video_core/renderer_base.h"
 #include "video_core/shader_notify.h"
+#ifdef EGLANTINE_STREAMLINE
+#include "video_core/vulkan_common/streamline.h"
+#include "video_core/vulkan_common/streamline_frame_gen.h"
+#endif
 
 #include <SDL3/SDL.h>
 
@@ -1208,6 +1212,37 @@ void MainWindow::InitializeWidgets() {
 
     statusBar()->insertPermanentWidget(0, volume_button);
 
+    frame_gen_status_button = new QPushButton();
+    frame_gen_status_button->setObjectName(QStringLiteral("TogglableStatusBarButton"));
+    frame_gen_status_button->setFocusPolicy(Qt::NoFocus);
+    frame_gen_status_button->setCheckable(true);
+    connect(frame_gen_status_button, &QPushButton::clicked, this, [this] {
+        Settings::values.frame_gen.SetValue(!Settings::values.frame_gen.GetValue());
+        UpdateFrameGenButton();
+    });
+    UpdateFrameGenButton();
+    frame_gen_status_button->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(frame_gen_status_button, &QPushButton::customContextMenuRequested,
+            [this](const QPoint& menu_location) {
+                QMenu context_menu;
+                for (auto const& [type, text] : ConfigurationShared::frame_gen_type_texts_map) {
+#ifndef EGLANTINE_STREAMLINE
+                    // Only builds with NVIDIA Streamline (Windows) have DLSS Frame Generation.
+                    if (type == Settings::FrameGenType::NvidiaDlssG) {
+                        continue;
+                    }
+#endif
+                    const QString label = ConfigurationShared::TranslateMapText(translator, text);
+                    context_menu.addAction(label, [this, type] {
+                        Settings::values.frame_gen_type.SetValue(type);
+                        Settings::values.frame_gen.SetValue(true);
+                        UpdateFrameGenButton();
+                    });
+                }
+                context_menu.exec(frame_gen_status_button->mapToGlobal(menu_location));
+                frame_gen_status_button->repaint();
+            });
+    statusBar()->insertPermanentWidget(0, frame_gen_status_button);
 #ifdef HAS_RESHADE
     post_shader_status_button = new QPushButton();
     post_shader_status_button->setObjectName(QStringLiteral("TogglableStatusBarButton"));
@@ -5293,6 +5328,27 @@ void MainWindow::UpdateStatusBar() {
     auto& shader_notify = QtCommon::system->GPU().ShaderNotify();
     const int shaders_building = shader_notify.ShadersBuilding();
 
+    // Before statsUpdated, so the performance overlay reads this update's generated frame rate.
+    const auto frame_gen = QtCommon::system->GPU().Renderer().GetFrameGenStatus();
+    const u64 new_generated_frames = frame_gen.generated_frames - frame_gen_frames;
+    const qint64 frame_gen_ms = frame_gen_fps_timer.isValid() ? frame_gen_fps_timer.restart() : 0;
+    if (!frame_gen_fps_timer.isValid()) {
+        frame_gen_fps_timer.start();
+    }
+    frame_gen_fps = frame_gen_ms > 0 ? static_cast<double>(new_generated_frames) * 1000.0 /
+                                           static_cast<double>(frame_gen_ms)
+                                     : 0.0;
+    frame_gen_generating = frame_gen.generated_frames > frame_gen_frames;
+#ifdef EGLANTINE_STREAMLINE
+    // NVIDIA DLSS Frame Generation adds its frames after the renderer, at present.
+    if (Vulkan::Streamline::FrameGenActive()) {
+        const auto rates = Vulkan::Streamline::FrameGenRecentRates();
+        frame_gen_fps = std::max(rates.shown_fps - rates.real_fps, 0.0);
+        frame_gen_generating = rates.generating;
+    }
+#endif
+    frame_gen_frames = frame_gen.generated_frames;
+    frame_gen_state = frame_gen.state;
     const auto dlss = QtCommon::system->GPU().Renderer().GetDlssStatus();
     dlss_status_text.clear();
     if (dlss.evaluations > dlss_evaluations) {
@@ -5362,8 +5418,22 @@ void MainWindow::UpdateStatusBar() {
     }
 
     QString fpsText = tr("Game: %1 FPS").arg(std::round(results.average_game_fps), 0, 'f', 0);
-    if (!m_fpsSuffix.isEmpty())
-        fpsText = fpsText % QStringLiteral(" (%1)").arg(m_fpsSuffix);
+    QString fpsSuffix = m_fpsSuffix;
+#ifdef EGLANTINE_STREAMLINE
+    if (Vulkan::Streamline::FrameGenActive()) {
+        QString frameGen = Vulkan::Streamline::FrameGenRecentRates().generating
+                               ? tr("DLSS FG")
+                               : tr("DLSS FG paused");
+        if (!fpsSuffix.isEmpty())
+            frameGen = frameGen % QStringLiteral(", ") % fpsSuffix;
+        fpsSuffix = frameGen;
+    }
+#endif
+    if (frame_gen_fps >= 0.5) {
+        fpsText = fpsText % tr(" + %1 generated").arg(std::round(frame_gen_fps), 0, 'f', 0);
+    }
+    if (!fpsSuffix.isEmpty())
+        fpsText = fpsText % QStringLiteral(" (%1)").arg(fpsSuffix);
 
     game_fps_label->setText(fpsText);
 
@@ -5514,6 +5584,104 @@ void MainWindow::UpdatePostShaderText() {
     post_shader_status_button->setText(QString::fromStdString(preset).toUpper());
 }
 #endif
+
+void MainWindow::UpdateFrameGenButton() {
+    const bool enabled = Settings::values.frame_gen.GetValue();
+    frame_gen_status_button->setChecked(enabled);
+    if (!enabled) {
+        frame_gen_status_button->setText(tr("NO FG"));
+        frame_gen_status_button->setToolTip(tr("Frame generation is off."));
+        return;
+    }
+
+    const Settings::FrameGenType selected_type = Settings::values.frame_gen_type.GetValue();
+    // Once a game runs, NVIDIA DLSS Frame Generation that isn't this session's generator gives
+    // way to FSR3.
+    const bool dlssg_fallback = selected_type == Settings::FrameGenType::NvidiaDlssG &&
+                                emulation_running &&
+                                frame_gen_state == VideoCore::FrameGenState::Running;
+    const Settings::FrameGenType shown_type =
+        dlssg_fallback ? Settings::FrameGenType::Fsr3 : selected_type;
+    const QString& type_text =
+        ConfigurationShared::frame_gen_type_texts_map.find(shown_type)->second;
+    const QString type = shown_type == Settings::FrameGenType::NvidiaDlssG
+                             ? QStringLiteral("DLSS-G")
+                             : ConfigurationShared::TranslateMapText(translator, type_text).toUpper();
+    const u32 target_rate = Settings::values.frame_gen_target_rate.GetValue();
+    const QString mode = target_rate == 0
+                             ? tr("FG %1 %2X").arg(type).arg(Settings::FrameGenMultiplier())
+                             : tr("FG %1 AUTO").arg(type);
+    const QString target = target_rate == 0
+                               ? QString()
+                               : tr(" It adds up to %1 frames per game frame to reach %2 FPS.")
+                                     .arg(Settings::MAX_FRAME_GEN_MULTIPLIER - 1)
+                                     .arg(target_rate);
+
+    if (!emulation_running) {
+        frame_gen_status_button->setText(mode);
+        frame_gen_status_button->setToolTip(
+            tr("Frame generation is on.%1 Whether it runs shows here once a game starts.")
+                .arg(target));
+        return;
+    }
+
+    QString unavailable;
+    switch (frame_gen_state) {
+    case VideoCore::FrameGenState::Pending:
+    case VideoCore::FrameGenState::Running:
+        break;
+    case VideoCore::FrameGenState::UnsupportedRenderer:
+        unavailable = tr("Frame generation needs the Vulkan renderer.");
+        break;
+    case VideoCore::FrameGenState::UnsupportedBuild:
+        unavailable = tr("This build was compiled without frame generation.");
+        break;
+    case VideoCore::FrameGenState::UnsupportedGpu:
+        unavailable = tr("This GPU lacks Vulkan features LSFG needs (Vulkan memory model, null "
+                         "descriptors and 16-bit floats). The Optical Flow type may still work.");
+        break;
+    case VideoCore::FrameGenState::UnsupportedSurface:
+        unavailable = tr("This GPU can't write to the window's swapchain format from a shader, so "
+                         "generated frames can't be presented.");
+        break;
+    case VideoCore::FrameGenState::MissingLosslessDll:
+        unavailable = tr("LSFG needs Lossless.dll from Lossless Scaling in the \"lossless\" folder "
+                         "of the user directory. It is missing or could not be loaded.");
+        break;
+    case VideoCore::FrameGenState::NvidiaFrameGen:
+        break;
+    }
+
+    if (!unavailable.isEmpty()) {
+        frame_gen_status_button->setChecked(false);
+        frame_gen_status_button->setText(tr("FG UNAVAILABLE"));
+        frame_gen_status_button->setToolTip(
+            tr("Frame generation is on but not running. %1").arg(unavailable));
+        return;
+    }
+
+    const QString fallback =
+        dlssg_fallback ? tr(" NVIDIA DLSS Frame Generation can't run for this game or setup, so "
+                            "FSR3 runs instead; the log says why.")
+                       : QString();
+    if (frame_gen_generating) {
+        frame_gen_status_button->setText(mode);
+        frame_gen_status_button->setToolTip(
+            tr("Frame generation is running.%1%2").arg(target, fallback));
+        return;
+    }
+
+    const QString target_met =
+        target_rate == 0
+            ? QString()
+            : tr(" It also pauses while the game already reaches %1 FPS.").arg(target_rate);
+    frame_gen_status_button->setText(tr("%1 (IDLE)").arg(mode));
+    frame_gen_status_button->setToolTip(
+        tr("Frame generation is on but generated no frames in the last half second. It pauses "
+           "while it warms up, for a second after a frame takes longer than 100 ms, and while "
+           "frames arrive in bursts.%1%2")
+            .arg(target_met, fallback));
+}
 
 void MainWindow::UpdateVolumeUI() {
     const auto volume_value = static_cast<int>(Settings::values.volume.GetValue());
