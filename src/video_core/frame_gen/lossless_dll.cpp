@@ -418,7 +418,16 @@ template <typename Map>
 } // Anonymous namespace
 
 std::filesystem::path GetLosslessDllPath() {
-    return Common::FS::GetEdenPath(Common::FS::EdenPath::LosslessDir) / LOSSLESS_DLL_FILE;
+    const auto user_path =
+        Common::FS::GetEdenPath(Common::FS::EdenPath::LosslessDir) / LOSSLESS_DLL_FILE;
+    if (Common::FS::Exists(user_path)) {
+        return user_path;
+    }
+    const auto exe_path = Common::FS::GetExeDirectory() / LOSSLESS_DLL_FILE;
+    if (Common::FS::Exists(exe_path)) {
+        return exe_path;
+    }
+    return user_path;
 }
 
 std::filesystem::path GetShaderCachePath() {
