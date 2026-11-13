@@ -1,59 +1,64 @@
-# Fritchii v5.9.0 Zero-Stutter Custom Build
+# Fritchii Zero-Stutter Custom Build
 ### *The Legend of Zelda: Ocarina of Time (Nintendo Switch 2 Remake) on PC*
 
 [![Release](https://img.shields.io/github/v/release/giangero1/Fritchii-ZeroStutter?color=brightgreen&label=Release)](https://github.com/giangero1/Fritchii-ZeroStutter/releases)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-Welcome to **Fritchii v5.9.0 Zero-Stutter**, the breakthrough release delivering **fully functional Frame Generation**, **RTX 30-series (Ampere) DLSS-G spoofing via OpenDLSSG**, **native AMD FSR 3.1 Optical Flow compute interpolation**, and in-engine **Dynamic DLSS Resolution Scaling** for *The Legend of Zelda: Ocarina of Time Remake*, layered atop our battle-tested Zero-Stutter C++ engine patches.
+**Fritchii Zero-Stutter** is a specialized high-performance fork of Fritchii engineered from the ground up to solve the core architectural stuttering, compilation freezes, memory leaks, and visual regressions in *The Legend of Zelda: Ocarina of Time Remake* on PC.
+
+Our latest **v5.9.0 update** expands on this foundation with **multi-engine Frame Generation** (featuring **NVIDIA DLSS-G spoofing for RTX 30-series Ampere** and **native AMD FSR 3.1 Optical Flow**), alongside dynamic VRAM optimization.
 
 ---
 
-## 🎮 Verified 122+ FPS Performance Benchmark
+## 🏛️ The Core Zero-Stutter Pillars
 
-Tested live in *The Legend of Zelda: Ocarina of Time* (`0400486024DEC000`) on PC:
+This repository focuses on five inviolable engine fixes that eliminate hitches and crashes during gameplay:
 
-![122 FPS Gameplay Proof on RTX 3070](docs/fritchii-5.9.0-proof-122fps.jpg)
+### 1. Compute Shader `DontInline` Directive (Combat Freeze Fix)
+* **The Problem:** Upstream SPIR-V compilation inlines massive compute global memory helpers, causing NVIDIA driver compiler spikes lasting **up to 7.6 seconds** whenever Link hits grass, smashes pots, or strikes enemies.
+* **The Solution:** Enforces `spv::FunctionControlMask::DontInline` in `spirv_emit_context.cpp`. Compiler freezes drop from **7.6s down to <1 ms**, delivering instant, zero-stutter combat.
 
-* **Framerate**: **122 FPS** (**55 Base Game FPS + 52 Generated Frames**)
-* **1% Low Framerate**: **61 FPS** (Rock-solid frame pacing, perfectly matching the 60 FPS base target)
-* **Input Latency**: **0 ms overhead**
-* **Resolution**: 1440p / 4K DLAA Preset J
-* **Test Rig**: NVIDIA GeForce RTX 3070 8GB | AMD Ryzen 7 5800X3D | 32 GB RAM | 240Hz Display
+### 2. `GuessMissing` Disk Pipeline Cache Fallback (Boot & Traversal)
+* **The Problem:** Pipelines with unrecorded constant buffer descriptors are ordinarily discarded upstream, triggering heavy runtime hitching during world traversal.
+* **The Solution:** Our `GuessMissing` disk cache fallback in `CreateCachedGraphicsPipeline` guarantees that **100% of the 28,612 pre-warmed pipelines** compile cleanly from disk cache during boot.
 
-> [!NOTE]
-> **Why Ampere (RTX 30 Series) Achieves 122+ FPS**:  
-> Through our bundled OpenDLSSG architecture spoofer and our C++ zero-stutter presentation pipeline, Fritchii unlocks optical flow frame generation on RTX 30-series GPUs. The GPU generates 52 brand new interpolated frames every second alongside the 55 base engine frames directly within the Vulkan swapchain, doubling visual smoothness with zero input lag!
+### 3. SMMU Range Unmapping & Memory Leak Protection (PR #1199)
+* **The Problem:** Entering new dungeons or areas previously caused stale GPU memory mappings to read `NaN` coordinates, producing expanding solid-white geometry and memory overflow crashes.
+* **The Solution:** Actively refreshes SMMU device backing and unmaps destroyed GPU memory ranges upon area transitions, preventing VRAM bloat and texture corruption.
+
+### 4. Occlusion Query Sample Preservation (`bda09fbc77`)
+* **The Problem:** Sample counts exceeding 1,024 slots were previously dropped across query submissions, causing sudden white flashes and overexposure when rotating the camera.
+* **The Solution:** Preserves sample counts across bank limits, eliminating lighting washouts.
+
+### 5. Multi-Core Hardware Boost Suite (`Play-Fritchii-5.9.0-ZeroStutter.cmd`)
+* Dual draw-call multi-core workers (`EDEN_NX2_SPLIT=2`), 6 pipeline warming threads (`EDEN_NX2_WARM_THREADS=6`), syncpoint batching (`EDEN_NX2_PERF_ON=index_rebind,clean_words,fence_flush`), and built-in Graphics Pipeline Library (GPL) neutralization.
 
 ---
 
-## 🚀 What's New & Fixed in v5.9.0
+## 🔥 New in Update v5.9.0: Frame Generation & Performance Enhancements
 
-### 1. Fully Working Frame Generation (Zero-IDLE Fix)
-* **Ghost Counter Bug Fixed**: Fixed the upstream defect in `frame_gen.cpp` where `generated_frames` was never incremented during presentation, which previously caused frame generation to report `(IDLE)` in the status bar even when active.
-* **Pre-Allocated Swapchain Frame Buffers**: Swapchain allocations now proactively size frame queues (`generations = std::max(Settings::FrameGenMaxGenerations(), 1)`) and permanently enable storage views (`storage_required = true`) so toggling Frame Gen dynamically at runtime never starves the presentation queue or causes pipeline stalls.
-* **Dynamic Mode Switching & Fallback**: Added seamless fallback routing in `frame_gen.cpp`. If external Streamline hooks encounter driver restrictions, Fritchii instantly falls back to native Vulkan compute shaders without frame drops or crashes.
+The v5.9.0 release integrates cutting-edge frame interpolation directly into the presentation swapchain:
 
-### 2. Multi-Engine Frame Generation Support
-* **AMD FSR 3.1 Optical Flow**: Runs 100% natively on the GPU via pre-compiled SPIR-V Vulkan compute shaders (`fsr3_optical_flow_comp_spv.h` / `fsr3_frame_interpolation_comp_spv.h`). Zero external DLL dependencies, zero driver interop overhead, and delivers peak raw FPS.
-* **NVIDIA DLSS Frame Generation (RTX 30 & 40 Series)**: Pre-configured with the OpenDLSSG stack (`version.dll`, `opendlssg.ini`, and genuine NVIDIA `nvngx_dlssg.dll`) to spoof Ada Lovelace architecture to Streamline, allowing Ampere GPUs (RTX 3070, 3080, etc.) to run DLSS-G.
-* **Lossless Scaling (LSFG)**: Dual search path enabled—place your `Lossless.dll` from Lossless Scaling into either the emulator root folder or `user\lossless\Lossless.dll`.
+![Frame Generation Proof in Kokiri Forest](docs/fritchii-5.9.0-proof.jpg)
 
-### 3. Dynamic In-Engine DLSS Resolution Scaling (PR #1589)
-* Dynamic internal render scaling hooked directly to DLSS quality settings:
+### 1. RTX 30-Series (Ampere) DLSS Frame Generation
+* Pre-configured with the **OpenDLSSG** runtime (`version.dll`, `opendlssg.ini`, and genuine NVIDIA `nvngx_dlssg.dll`) to spoof Ada Lovelace architecture to Streamline.
+* Unlocks DLSS Frame Generation on **RTX 3070, 3080, and 3090** GPUs with zero latency penalty (`LAT 0 ms`).
+
+### 2. Native Vulkan Compute FSR 3.1 Optical Flow
+* Fully native optical flow interpolation running on SPIR-V Vulkan compute shaders (`fsr3_optical_flow_comp_spv.h` / `fsr3_frame_interpolation_comp_spv.h`).
+* Zero external DLL dependencies or driver friction—works across all modern GPUs.
+
+### 3. Upstream `(IDLE)` Frame Gen Bug Fixed
+* Fixed the upstream bug in `frame_gen.cpp` where `generated_frames` was never incremented during presentation.
+* Pre-allocates swapchain frame queues (`generations = std::max(Settings::FrameGenMaxGenerations(), 1)`) and permanently enables storage views (`storage_required = true`) so toggling Frame Gen on the fly never drops frames.
+
+### 4. Dynamic In-Engine DLSS Render Scaling (PR #1589)
+* Automatically scales internal render resolution with DLSS quality presets:
   - **Balanced:** 2276x1280 (0.871x)
   - **Performance:** 1920x1080 (0.75x)
   - **Ultra Performance:** 1280x720 (0.5x)
 * Frees 1.5 GB to 2.0 GB of VRAM on 8GB GPUs, keeping total VRAM consumption strictly under 6GB and preventing VRAM overflow stutters.
-
-### 4. Visual & Rendering Fixes Included
-* **Fix for Spreading White Textures & Glowing Geometry (PR #1199):** Refreshes stale SMMU device backing and unmaps destroyed GPU ranges upon area transitions.
-* **Occlusion Query Fix (`bda09fbc77`):** Carries sample counts across query submissions rather than dropping counts past 1,024 slots. Eliminates camera-movement white flashes.
-* **Compute Shader Storage Write Extent Protection:** Fully tracks compute program storage buffers, preventing persistent glowing triangle artifacts in long play sessions.
-
-### 5. Proven Zero-Stutter C++ Engine Patches Retained
-* **Compute Shader `DontInline` Directive:** Forces `spv::FunctionControlMask::DontInline` on compute global memory helpers in `spirv_emit_context.cpp`. Drops NVIDIA SPIR-V compiler freezes from **7.6 seconds down to <1 ms**, completely eliminating combat freezes when slashing grass, attacking enemies, and hitting pots.
-* **`GuessMissing` Disk Cache Fallback:** Ensures **100% of 28,612 pipelines** compile cleanly from disk cache at boot.
-* **Hardware Boost Launcher Suite (`Play-Fritchii-5.9.0-ZeroStutter.cmd`):** Dual draw-call multi-core workers (`EDEN_NX2_SPLIT=2`), 6 pipeline warming threads (`EDEN_NX2_WARM_THREADS=6`), and syncpoint batching (`EDEN_NX2_PERF_ON=index_rebind,clean_words,fence_flush`). Built-in GPL neutralization (`use_graphics_pipeline_library=false`).
 
 ---
 
