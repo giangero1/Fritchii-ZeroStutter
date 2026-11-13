@@ -1,10 +1,10 @@
-# Fritchii v5.8.4 Zero-Stutter Custom Build
+# Fritchii v5.9.0 Zero-Stutter Custom Build
 ### *The Legend of Zelda: Ocarina of Time (Nintendo Switch 2 Remake) on PC*
 
 [![Release](https://img.shields.io/github/v/release/giangero1/Fritchii-ZeroStutter?color=brightgreen&label=Release)](https://github.com/giangero1/Fritchii-ZeroStutter/releases)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-Welcome to **Fritchii v5.8.4 Zero-Stutter**, an updated personal build featuring both our proven zero-stutter C++ engine patches and critical upstream fixes for the late-game white texture wash and glowing light bugs.
+Welcome to **Fritchii v5.9.0 Zero-Stutter (RTX 30 FrameGen & Dynamic DLSS)**, a major update bringing NVIDIA Streamline DLSS Frame Generation, Ampere RTX 30-series FrameGen enablement via OpenDLSSG, and in-engine Dynamic DLSS Quality Resolution Scaling to *The Legend of Zelda: Ocarina of Time Remake*, layered atop our proven Zero-Stutter engine patches.
 
 > [!NOTE]
 > **Target Hardware & Configuration**:  
@@ -14,16 +14,31 @@ Welcome to **Fritchii v5.8.4 Zero-Stutter**, an updated personal build featuring
 > - **RAM:** 32 GB DDR4
 > - **OS:** Windows 10 / 11 64-bit
 >
-> If you have an NVIDIA RTX card and a modern high-cache CPU on Windows, this fork eliminates the notorious combat stutters (sword slashing, pot smashing, enemy attacks), traversal hitches, and late-game white texture bugs experienced with stock builds.
+> If you have an NVIDIA RTX card and a modern high-cache CPU on Windows, this fork eliminates combat freezes, traversal hitches, VRAM thrashing, and late-game white texture wash, while doubling framerate via optical flow Frame Generation.
 
 ---
 
-## 🛡️ Critical Visual & Rendering Fixes Included
+## 🚀 New Features in v5.9.0
+
+1. **Streamline DLSS Frame Generation (PR #1508) + RTX 30 Enabler**:
+   - Integrated NVIDIA Streamline runtime with native Ocarina of Time camera matrices, optical flow motion vectors, and depth buffer handoff.
+   - Bundled OpenDLSSG runtime (`fakenvapi` + `dlssg_to_fsr3_amd_is_better` + `amd_fidelityfx_vk`) unlocking DLSS Frame Generation on RTX 30-series GPUs (Ampere) at zero latency penalty.
+   - Built-in status bar button and frame pacer tracking generated frames and display interval.
+2. **Dynamic In-Engine DLSS Render Resolution Scaling (PR #1589)**:
+   - Dynamic internal render scaling hooked directly to DLSS quality settings:
+     - **Balanced:** 2276x1280 (0.871x)
+     - **Performance:** 1920x1080 (0.75x)
+     - **Ultra Performance:** 1280x720 (0.5x)
+   - Frees 1.5 GB to 2.0 GB of VRAM on 8GB GPUs, keeping total VRAM consumption strictly under 6GB and preventing VRAM overflow stutters.
+
+---
+
+## 🛡️ Visual & Rendering Fixes Included
 
 1. **Fix for Spreading White Textures & Glowing Geometry (PR #1199):**
    - Fixes the bug where entering new areas or dungeons causes geometry to read freed GPU memory, producing `NaN` coordinates that turned terrain and character meshes solid white.
    - Refreshes stale SMMU device backing and unmaps destroyed GPU ranges upon area transitions.
-2. **Nov 10 Upstream Occlusion Query Fix (`bda09fbc77`):**
+2. **Occlusion Query Fix (`bda09fbc77`):**
    - Carries sample counts across query submissions rather than dropping counts past 1,024 slots. Eliminates camera-movement white flashes and overexposure.
 3. **Compute Shader Storage Write Extent Protection:**
    - Fully tracks compute program storage buffers, preventing persistent glowing triangle artifacts in long play sessions.
@@ -38,7 +53,7 @@ Welcome to **Fritchii v5.8.4 Zero-Stutter**, an updated personal build featuring
 2. **`GuessMissing` Disk Cache Fallback:**
    - Fallback in `CreateCachedGraphicsPipeline` prevents pipelines with unrecorded constant buffer descriptors from being discarded.
    - Ensures **100% of 28,612 pipelines** compile cleanly from disk cache at boot.
-3. **Hardware Boost Launcher Suite (`Play-Fritchii-5.8.4-Boost.cmd`):**
+3. **Hardware Boost Launcher Suite (`Play-Fritchii-5.9.0-ZeroStutter.cmd`):**
    - Dual draw-call multi-core workers (`EDEN_NX2_SPLIT=2`), 6 pipeline warming threads (`EDEN_NX2_WARM_THREADS=6`), and syncpoint batching (`EDEN_NX2_PERF_ON=index_rebind,clean_words,fence_flush`).
    - Built-in GPL neutralization (`use_graphics_pipeline_library=false`).
 

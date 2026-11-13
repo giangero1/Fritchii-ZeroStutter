@@ -1225,15 +1225,14 @@ void MainWindow::InitializeWidgets() {
     connect(frame_gen_status_button, &QPushButton::customContextMenuRequested,
             [this](const QPoint& menu_location) {
                 QMenu context_menu;
-                for (auto const& [type, text] : ConfigurationShared::frame_gen_type_texts_map) {
+                for (auto const& fg_text_pair : ConfigurationShared::frame_gen_type_texts_map) {
 #ifndef EGLANTINE_STREAMLINE
                     // Only builds with NVIDIA Streamline (Windows) have DLSS Frame Generation.
-                    if (type == Settings::FrameGenType::NvidiaDlssG) {
+                    if (fg_text_pair.first == Settings::FrameGenType::NvidiaDlssG) {
                         continue;
                     }
 #endif
-                    const QString label = ConfigurationShared::TranslateMapText(translator, text);
-                    context_menu.addAction(label, [this, type] {
+                    context_menu.addAction(fg_text_pair.second, [this, type = fg_text_pair.first] {
                         Settings::values.frame_gen_type.SetValue(type);
                         Settings::values.frame_gen.SetValue(true);
                         UpdateFrameGenButton();
@@ -5606,7 +5605,7 @@ void MainWindow::UpdateFrameGenButton() {
         ConfigurationShared::frame_gen_type_texts_map.find(shown_type)->second;
     const QString type = shown_type == Settings::FrameGenType::NvidiaDlssG
                              ? QStringLiteral("DLSS-G")
-                             : ConfigurationShared::TranslateMapText(translator, type_text).toUpper();
+                             : type_text.toUpper();
     const u32 target_rate = Settings::values.frame_gen_target_rate.GetValue();
     const QString mode = target_rate == 0
                              ? tr("FG %1 %2X").arg(type).arg(Settings::FrameGenMultiplier())

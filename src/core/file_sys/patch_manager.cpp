@@ -106,13 +106,22 @@ constexpr std::array<u8, 4> RENDER_SCALE_BALANCED{0xE9, 0xEB, 0xA7, 0x52};    //
 constexpr std::array<u8, 4> RENDER_SCALE_PERFORMANCE{0x09, 0xE8, 0xA7, 0x52}; // 0.75, 1920x1080
 constexpr std::array<u8, 4> RENDER_SCALE_ULTRA{0x09, 0xE0, 0xA7, 0x52};       // 0.5, 1280x720
 constexpr std::array RENDER_BALANCED_RECORDS{
-    BuiltinPatchRecord{0x806420, RENDER_SCALE_BALANCED, RENDER_SCALE_ONE},
+    BuiltinPatchRecord{.module_offset = 0x806420,
+                       .bytes = RENDER_SCALE_BALANCED,
+                       .checked = true,
+                       .original = 0x52A7F009},
 };
 constexpr std::array RENDER_PERFORMANCE_RECORDS{
-    BuiltinPatchRecord{0x806420, RENDER_SCALE_PERFORMANCE, RENDER_SCALE_ONE},
+    BuiltinPatchRecord{.module_offset = 0x806420,
+                       .bytes = RENDER_SCALE_PERFORMANCE,
+                       .checked = true,
+                       .original = 0x52A7F009},
 };
 constexpr std::array RENDER_ULTRA_RECORDS{
-    BuiltinPatchRecord{0x806420, RENDER_SCALE_ULTRA, RENDER_SCALE_ONE},
+    BuiltinPatchRecord{.module_offset = 0x806420,
+                       .bytes = RENDER_SCALE_ULTRA,
+                       .checked = true,
+                       .original = 0x52A7F009},
 };
 
 // Dynamic FPS by Dark (Eglantine Dev), bundled with his permission: the game's frame step follows

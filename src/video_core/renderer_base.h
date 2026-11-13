@@ -81,6 +81,11 @@ public:
 
     [[nodiscard]] virtual std::string GetDeviceVendor() const = 0;
 
+    /// Whether frame generation can run and how many frames it has generated so far
+    [[nodiscard]] virtual FrameGenStatus GetFrameGenStatus() const {
+        return {};
+    }
+
     /// How many NVIDIA DLSS evaluations ran so far and the mode of the last one
     [[nodiscard]] virtual DlssStatus GetDlssStatus() const {
         return {};
