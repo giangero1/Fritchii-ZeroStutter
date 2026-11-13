@@ -399,9 +399,18 @@ bool ResolveFeature(const Api& api, sl::Feature feature, const char* name, T*& f
 /// Checks DLSS-G, Reflex and PCL on the attached device and fetches their functions.
 bool AttachFrameGen(State& state, const sl::AdapterInfo& adapter) {
     Api& api = state.api;
+    const bool has_opendlssg = std::filesystem::exists("nvngx_dlssg.dll") ||
+                               std::filesystem::exists("user/streamline/nvngx_dlssg.dll");
     for (const FrameGenFeature& entry : FRAME_GEN_FEATURES) {
         if (const sl::Result result = api.is_feature_supported(entry.feature, adapter);
             result != sl::Result::eOk) {
+            if (has_opendlssg && (result == sl::Result::eErrorFeatureNotSupported ||
+                                  static_cast<int>(result) == 32)) {
+                LOG_INFO(Render_Vulkan,
+                         "Streamline: Bypassing hardware check for {} (result {}) using OpenDLSSG enabler",
+                         entry.name, static_cast<int>(result));
+                continue;
+            }
             LOG_WARNING(Render_Vulkan,
                         "NVIDIA DLSS Frame Generation is off: {} is not supported on this GPU, "
                         "driver or Windows setup, result {}{}",
@@ -738,14 +747,20 @@ bool AttachDevice(VkInstance instance, VkPhysicalDevice physical, VkDevice devic
     }
     sl::AdapterInfo adapter{};
     adapter.vkPhysicalDevice = physical;
-    if (const sl::Result result = state.api.is_feature_supported(sl::kFeatureDLSS, adapter);
-        result != sl::Result::eOk) {
+    const sl::Result dlss_res = state.api.is_feature_supported(sl::kFeatureDLSS, adapter);
+    const bool has_opendlssg = std::filesystem::exists("nvngx_dlssg.dll") ||
+                               std::filesystem::exists("user/streamline/nvngx_dlssg.dll");
+    if (dlss_res != sl::Result::eOk) {
         LOG_WARNING(Render_Vulkan,
                     "NVIDIA DLSS is not supported on this GPU or driver (Streamline result {}); "
                     "using FSR 3.1",
-                    static_cast<int>(result));
-        Stop();
-        return false;
+                    static_cast<int>(dlss_res));
+        if (!has_opendlssg) {
+            Stop();
+            return false;
+        }
+        LOG_INFO(Render_Vulkan,
+                 "OpenDLSSG detected: continuing Streamline attachment for Frame Generation");
     }
     // Manual hooking: Streamline does its per-frame work in these.
     const auto hook = [&](auto& function, const char* name) {
