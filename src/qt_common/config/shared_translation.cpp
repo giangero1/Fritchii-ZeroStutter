@@ -165,11 +165,34 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
               "download button below.\nFire Emblem: Fortune's Weave also needs "
               "EDEN_NX2_DLSS_REPLACEMENT=dlss. Without that override, its spatial workaround "
               "remains active.\nIn The Legend of Zelda: Ocarina of Time it replaces the game's "
-              "upscaler at 1x resolution scale.\nTakes effect when a game starts."));
-    INSERT(Settings, nvidia_dlss_quality, tr("DLSS quality:"),
-           tr("Automatic picks the mode from the game's own resolution. Native (DLAA) keeps the "
-              "game's resolution and only smooths it. Other modes apply when they fit the game's "
-              "resolution, otherwise Automatic is used. Changes apply while playing."));
+              "upscaler at 1x resolution scale.\nThe window adapting filter (the FSR 1, Bilinear "
+              "and similar button in the status bar) is separate and runs after DLSS. While DLSS "
+              "runs, the status bar shows DLSS, its mode and its preset. If DLSS fails, it stays "
+              "off until the game restarts and the log says why.\nTakes effect when a game "
+              "starts."));
+    INSERT(Settings, nvidia_dlss_quality, tr("NVIDIA DLSS quality:"),
+           tr("Applies only when a game uses its own DLSS.\nAutomatic selects a mode for the "
+              "game's render/output sizes. Native (DLAA) "
+              "applies anti-aliasing at the game's render resolution, then scales to its output; "
+              "Ocarina's 1440p mode stays at 1440p instead of reconstructing to 4K.\n"
+              "In The Legend of Zelda: Ocarina of Time (docked, with the Max Resolution add-on), "
+              "Balanced, Performance and Ultra Performance lower the game's render resolution "
+              "from 2560x1440 to 2276x1280, 1920x1080 and 1280x720 before DLSS reconstructs 4K. "
+              "That resolution changes when the game starts.\n"
+              "In other games, explicit modes only apply when the game's render size is within "
+              "NVIDIA's supported range; otherwise Automatic is used and the fallback is logged. "
+              "There they don't change the game's render resolution. Apply/OK updates the mode "
+              "while playing."));
+    INSERT(
+        Settings, nvidia_dlss_preset, tr("NVIDIA DLSS model preset:"),
+        tr("Applies only when a game uses its own DLSS.\nM (DLSS 4.5) is Lichii's default for "
+           "every quality mode. NVIDIA recommends K for "
+           "DLAA/Quality/Balanced, M for Performance, and L for Ultra Performance.\n"
+           "L/M cost more on RTX 20/30 GPUs; consider K. J may reduce ghosting but flicker more. "
+           "E/F are deprecated CNN models. NVIDIA default lets the runtime choose.\n"
+           "L/M require DLSS 310.5 or newer; the download button provides 310.9.16. "
+           "If Fire Emblem shows horizontal lines with L/M at 2x, try K. "
+           "NVIDIA app overrides may supersede this choice. Apply/OK updates it while playing."));
     INSERT(Settings, anti_aliasing, tr("Anti-Aliasing Method:"),
            tr("The anti-aliasing method to use.\nSMAA offers the best quality.\nFXAA "
               "can produce a more stable picture in lower resolutions."));
