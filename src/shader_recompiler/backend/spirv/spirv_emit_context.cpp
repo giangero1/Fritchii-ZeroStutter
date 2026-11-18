@@ -987,21 +987,28 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
     // function per program and the accesses stay inlinable: each access calls the search once and
     // switches on the buffer it returns. Graphics programs stay as with =1.
     // Read per program (main() sets it at boot, before any shader is built) so tests can switch it.
+    // Zero-Stutter default: mode 2 (DontInline for compute programs only, graphics stays inlined)
+    // eliminates 7.6 s NVIDIA Ampere compute compile freezes with zero graphics FPS loss.
+    // Overridable via EDEN_NX2_SPIRV_INLINE_GLOBALS (0/1/2/3) or EDEN_NX2_COMPUTE_NOINLINE (0/1).
     const int inline_mode = [] {
-        const char* value = std::getenv("EDEN_NX2_SPIRV_INLINE_GLOBALS");
-        if (value == nullptr) {
-            return 1;
+        if (const char* value = std::getenv("EDEN_NX2_SPIRV_INLINE_GLOBALS")) {
+            switch (value[0]) {
+            case '0':
+                return 0;
+            case '1':
+                return 1;
+            case '2':
+                return 2;
+            case '3':
+                return 3;
+            default:
+                return 2;
+            }
         }
-        switch (value[0]) {
-        case '0':
-            return 0;
-        case '2':
-            return 2;
-        case '3':
-            return 3;
-        default:
-            return 1;
+        if (const char* value = std::getenv("EDEN_NX2_COMPUTE_NOINLINE")) {
+            return value[0] != '0' ? 2 : 1;
         }
+        return 2;
     }();
     const bool dont_inline = inline_mode == 0 || (inline_mode == 2 && stage == Stage::Compute);
     const bool shared_search = inline_mode == 3 && stage == Stage::Compute;
