@@ -6,9 +6,9 @@
 
 **Fritchii Zero-Stutter** is an unofficial, modified high-performance fork of Fritchii engineered to eliminate shader/compute compilation freezes, disk cache stalls, and lighting regressions in *The Legend of Zelda: Ocarina of Time Remake* on PC — while bringing **full 120 FPS Multi-Engine Frame Generation** (including **NVIDIA Streamline DLSS-G + RTX 30-Series OpenDLSSG**) onto **Fritchii v6.0**.
 
-![Fritchii v6.0 Zero-Stutter 4K DLSS Quality J + DLSS-G 2X FrameGen on RTX 3070](docs/fritchii-6.0-proof.jpg)
+![Fritchii v6.0 Zero-Stutter 4K 127 FPS — 1440p to 4K DLSS Quality J + DLSS-G 2X on RTX 3070](docs/fritchii-6.0-4k-127fps.png)
 
-* **Verified Performance (Temple Interior — Full 4K DLSS Quality J + DLSS-G 2X):** **105–107 FPS** (**53 Base Game FPS + 54 Generated Frames**), **94% GPU**, **34% CPU**, **0 ms latency overhead** (`1440p → 4K · DLSS`) on **RTX 3070 8GB + Ryzen 7 5800X3D**. Lowering output to **1440p** or **DLSS Balanced** locks **60 base + 60 generated = 120 FPS**.
+* **Verified Performance (Forest Temple — Full `1440p → 4K` DLSS Quality J + DLSS-G 2X):** **127 FPS** (**63 Base Game FPS + 64 Generated Frames**), **93% GPU**, **54% CPU**, **15.69 ms frame time**, **0 ms latency overhead** on **RTX 3070 8GB + Ryzen 7 5800X3D**.
 
 ---
 
