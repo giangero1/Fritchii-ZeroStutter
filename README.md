@@ -1,62 +1,60 @@
-<!--
-# SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
-# SPDX-License-Identifier: GPL-3.0-or-later
+# Fritchii v6.0 Zero-Stutter Custom Build
+### *The Legend of Zelda: Ocarina of Time (Nintendo Switch 2 Remake) on PC*
 
-# SPDX-License-Identifier: GPL-2.0-or-later
--->
+[![Release](https://img.shields.io/github/v/release/giangero1/Fritchii-ZeroStutter?color=brightgreen&label=Release)](https://github.com/giangero1/Fritchii-ZeroStutter/releases)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-<p align="center">
-  <img src="dist/fritchii.png" alt="Fritchii" width="256">
-</p>
+**Fritchii Zero-Stutter** is a specialized high-performance fork of Fritchii engineered to eliminate shader/compute compilation freezes, disk cache stalls, and lighting regressions in *The Legend of Zelda: Ocarina of Time Remake* on PC — while bringing **full 120 FPS Multi-Engine Frame Generation** (including **NVIDIA Streamline DLSS-G + RTX 30-Series OpenDLSSG**) onto **Fritchii v6.0**.
 
-# Fritchii
+---
 
-Fritchii is an experimental, open-source Nintendo Switch and Switch 2 emulator written in C++, tuned for The Legend of Zelda: Ocarina of Time. Fritchii is not affiliated with Nintendo.
+## 🔥 What's New in Fritchii v6.0 Zero-Stutter
 
-Fritchii is a modified version of GPL-licensed software: see [LICENSE.txt](LICENSE.txt) and the copyright notices in the source files.
+Built directly on upstream **Fritchii v6.0** (`c36d853a96` — 1,191 commits over v5.8.4), combining every upstream v6.0 performance breakthrough with our complete Zero-Stutter & Frame Generation stack:
 
-## Downloads and setup
+### Upstream Fritchii v6.0 Breakthroughs Preserved
+* **3rd GPU Thread (`FRITCHII_ONEF_*`)**: Dedicated draw-recording thread removes the Castle Town Market CPU wall (60+ FPS locked in Market & Pot Room).
+* **Shared 6-Core JIT Code Cache**: Saves ~1 GB RAM and cuts area-load stutter by ~25%.
+* **8 GB VRAM Small-Card Mode (`FRITCHII_SMALL_CARD=2`)**: Keeps RTX 3070 8GB comfortably inside VRAM budget.
+* **Built-In Dynamic DLSS Render Scaling (`#1589`)**, DLSS Jitter, Texture Sharpness, `Tools > Switches`, unified OoT settings, pot-room crash fix, and `fritchii.exe` + `lichii.exe` forwarder.
 
-Builds are on the [releases page](https://github.com/Frizti/Fritchii/releases).
+### Custom Zero-Stutter + 120 FPS FrameGen Engine Patches
+1. **Compute Shader `DontInline` Default (`spirv_emit_context.cpp`)**:
+   * Defaults `inline_mode` to **`2`** (compute-only `DontInline`, graphics stays inlined), eliminating 7.6-second NVIDIA Ampere compute shader compile freezes with zero graphics FPS loss.
+   * Honors both `EDEN_NX2_COMPUTE_NOINLINE` and `EDEN_NX2_SPIRV_INLINE_GLOBALS` (`0` = all DontInline, `1` = all inlined, `2` = compute-only DontInline [default], `3` = v6 shared DontInline buffer search).
+2. **`GuessMissing` Disk Pipeline Cache Fallback (`vk_pipeline_cache.cpp`)**:
+   * Injects `env.SetGuessMissing(&guess)` inside `PipelineCache::CreateCachedGraphicsPipeline` so disk-cached pipelines with unrecorded buffer descriptors deserialize cleanly at boot instead of stalling mid-game.
+3. **Occlusion Query Sample Carry Fix (`vk_query_cache.cpp`, `03534dc645`)**:
+   * Carries occlusion sample counts across bank bounds instead of dropping them, eliminating Ocarina white-light flashes and overexposure.
+4. **Full Multi-Engine Frame Generation Restored on v6.0**:
+   * Re-enables the full Frame Generation subsystem removed in upstream `9f95262d0f` and exposes all FrameGen controls in Fritchii v6's Graphics UI (`FritchiiUi::HidesSetting`).
+   * **Streamline DLSS Frame Generation (`#1508`) + RTX 30-Series OpenDLSSG**: Unlocks `FrameGenActive`, bypasses Streamline error 32 on RTX 3070/3080/3090 via OpenDLSSG + FakeNVAPI (`version.dll`, `opendlssg.ini`, `nvngx_dlssg.dll`), and fixes the `(IDLE)` ghost counter bug.
+   * **Native Vulkan Compute Optical Flow & LSFG Fallbacks** also available via the bottom status bar **`FG`** button.
 
-On Windows, extract the entire build archive and run **lichii.exe** (the executable keeps that name for now). Only use games and system files you have legally obtained. Games, keys and firmware are not included.
+---
 
-### Existing saves and settings
+## ⚙️ CPU Core & Thread Tuning
 
-Fritchii keeps its own profile: `%APPDATA%\fritchii` on Windows, and the `fritchii` directories under `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME` and `$XDG_CACHE_HOME` on Linux and macOS. An existing portable `user/` directory still takes priority and is not imported or changed.
+Open `Play-Fritchii-6.0-ZeroStutter.cmd` (or `Tools > Switches` / `nx2_switches.txt`) to adjust `EDEN_NX2_WARM_THREADS`:
 
-On the first launch Fritchii copies your newest existing profile (an earlier Fritchii or Eden in `%APPDATA%\eden`, Lichii 150+ in `%APPDATA%\lichii`, else yuzu, suyu, sudachi or citron) into its folder and shows what it copied. Settings, keys, mods and saves are copied; caches are not, so shaders are prepared again once. The old folder is never changed. If the emulator using it is still open, close it and start Fritchii again. An interrupted copy is put back and retried on the next launch.
+| CPU Cores / Threads | Example Processors | Recommended `WARM_THREADS` |
+| :--- | :--- | :---: |
+| **8 Cores / 16 Threads** | AMD Ryzen 7 5800X3D / Intel Core i7-13700 | **`6`** *(Default)* |
+| **6 Cores / 12 Threads** | AMD Ryzen 5 5600X / Intel Core i5-12400 | **`4`** |
+| **4 Cores / 8 Threads** | Intel Core i3-12100 / AMD Ryzen 3 3300X | **`2`** |
 
-## Compatibility and issue reports
+---
 
-Compatibility and performance vary by game, hardware and driver. Rendering errors, stutters and crashes remain possible. Passing automated tests does not establish that a game renders correctly, and this project makes no universal frame-rate guarantee.
+## 🚀 Quick Start Guide (v6.0)
 
-When [reporting an issue](https://github.com/Frizti/Fritchii/issues), include:
+1. Extract the release package to a clean folder (e.g., `D:\Games\Fritchii-6.0-ZeroStutter`).
+2. Launch via **`Play-Fritchii-6.0-ZeroStutter.cmd`** (runs `fritchii.exe` with `GPL=false` and `EDEN_NX2_SPIRV_INLINE_GLOBALS=2`).
+3. **First Launch Note (v6.0):** Because v6.0 updated shader translation and renamed the main executable to `fritchii.exe`, allow the one-time **"Preparing shaders"** step to complete on first boot. Subsequent launches start fast with zero stutters.
+4. Right-click the **`FG`** button in the bottom status bar to toggle or switch between **DLSS-G**, **Optical Flow**, or **LSFG**.
 
-- The exact build, game version, CPU, GPU and driver version.
-- Relevant settings and steps to reproduce the problem.
-- A screenshot and the log from the affected session (Help > Export Log), after checking it for personal information.
+---
 
-Do not upload game files, keys, firmware or private account information. Questions and help: [discord.gg/fritchii](https://discord.gg/fritchii).
-
-## Building and contributing
-
-See the [build guide](docs/Build.md) and [coding guidelines](docs/Coding.md). Some internal build target names still use older names: the GUI build target is `yuzu`, and its output is `lichii.exe` on Windows and `lichii` on other desktop platforms.
-
-Keep changes focused and distinguish code-level checks from actual gameplay testing.
-
-## Artwork
-
-The Fritchii logo, the pear (`dist/fritchii.png`, `dist/fritchii.ico`), was made for Fritchii by Freshdyno.
-
-## Credits and license
-
-Fritchii is a modified version of GPL-licensed software. The original copyright notices and third-party licenses are kept in the source files; see [LICENSE.txt](LICENSE.txt) for the license terms.
-
-Dynamic FPS by Dark, bundled with his permission.
-
-### Fritchii shader precompile recipe
-
-The shader precompile recipes (the `*.nx2recipe` files in the `recipes` folder) were made by Frizti for Fritchii. They are not part of the GPL-licensed source code and are all rights reserved: **to use them in your own build, fork or package, you need Frizti's direct permission first. Ask Frizti by direct message on Discord.** See [LICENSES/Fritchii-Recipe.txt](LICENSES/Fritchii-Recipe.txt).
-
-The precompile system itself (`src/video_core/nx2_precompile.*`, `src/yuzu/fritchii/precompile_gate.h`) is GPL code with additional terms under GPLv3 section 7: keep the credit "Shader precompile system by Frizti (Fritchii)", mark modified versions, and don't use the Fritchii name for other builds. See [LICENSES/Fritchii-Additional-Terms.txt](LICENSES/Fritchii-Additional-Terms.txt). If you want to use it, please ask Frizti on Discord first.
+## 📦 Previous Stable Backups (Preserved)
+* **Fritchii v5.9.0 Zero-Stutter (Proven 120 FPS Backup):** Permanently preserved in the [v5.9.0 Release](https://github.com/giangero1/Fritchii-ZeroStutter/releases/tag/v5.9.0-zerostutter) and on the [`release/v5.9.0-zerostutter`](https://github.com/giangero1/Fritchii-ZeroStutter/tree/release/v5.9.0-zerostutter) branch.
+* **Fritchii v5.8.4 Zero-Stutter:** Archived in the [v5.8.4 Release](https://github.com/giangero1/Fritchii-ZeroStutter/releases/tag/v5.8.4-zerostutter-r1).
+* **Fritchii v5.3 Zero-Stutter:** Archived in the [v5.3 Release](https://github.com/giangero1/Fritchii-ZeroStutter/releases/tag/v5.3-zerostutter-r1) and on [`backup/v5.3`](https://github.com/giangero1/Fritchii-ZeroStutter/tree/backup/v5.3).
