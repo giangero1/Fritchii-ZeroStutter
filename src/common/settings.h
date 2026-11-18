@@ -491,6 +491,75 @@ struct Values {
                                                 true,
                                                 true};
 
+    SwitchableSetting<bool> frame_gen{linkage, false, "frame_gen", Category::Renderer,
+                                      Specialization::Default, true, false};
+
+    SwitchableSetting<FrameGenType> frame_gen_type{linkage,
+                                                   FrameGenType::Fsr3,
+                                                   "frame_gen_type",
+                                                   Category::Renderer,
+                                                   Specialization::Default,
+                                                   true,
+                                                   false,
+                                                   &frame_gen};
+
+    SwitchableSetting<u32, true> frame_gen_multiplier{linkage,
+                                                      2,
+                                                      2,
+                                                      4,
+                                                      "frame_gen_multiplier",
+                                                      Category::Renderer,
+                                                      Specialization::Countable,
+                                                      true,
+                                                      false,
+                                                      &frame_gen};
+
+    SwitchableSetting<u32, true> frame_gen_target_rate{linkage,
+                                                       0,
+                                                       0,
+                                                       240,
+                                                       "frame_gen_target_rate",
+                                                       Category::Renderer,
+                                                       Specialization::Countable,
+                                                       true,
+                                                       true,
+                                                       &frame_gen};
+
+    SwitchableSetting<bool> frame_gen_flow_scale_auto{linkage,
+                                                      true,
+                                                      "frame_gen_flow_scale_auto",
+                                                      Category::Renderer,
+                                                      Specialization::Default,
+                                                      true,
+                                                      false,
+                                                      &frame_gen};
+
+    SwitchableSetting<u32, true> frame_gen_flow_scale{linkage,
+                                                      75,
+                                                      25,
+                                                      100,
+                                                      "frame_gen_flow_scale",
+                                                      Category::Renderer,
+                                                      Specialization::Countable |
+                                                          Specialization::Percentage,
+                                                      true,
+                                                      true,
+                                                      &frame_gen};
+
+    SwitchableSetting<u32, true> frame_gen_queue_target{linkage,
+                                                        0,
+                                                        0,
+                                                        2,
+                                                        "frame_gen_queue_target",
+                                                        Category::Renderer,
+                                                        Specialization::Countable,
+                                                        true,
+                                                        false,
+                                                        &frame_gen};
+
+    SwitchableSetting<bool> frame_gen_dump_flow{linkage, false, "frame_gen_dump_flow",
+                                                Category::Renderer};
+
     SwitchableSetting<bool> use_asynchronous_gpu_emulation{linkage, true, "use_asynchronous_gpu_emulation",
                                                            Category::Renderer};
     // *nix platforms may have issues with the borderless windowed fullscreen mode.
@@ -1057,6 +1126,13 @@ void SetAppliedOcarinaRenderScale(std::optional<NvidiaDlssQuality> quality);
 /// (1920x1080 at most in the owner's logs, upscaled to 1440p by its 3/4 pass).
 [[nodiscard]] bool OcarinaMaxResolutionOn();
 
+constexpr u32 MIN_FRAME_GEN_MULTIPLIER = 2;
+constexpr u32 MAX_FRAME_GEN_MULTIPLIER = 4;
+
+/// Whether frame generation runs: the setting, and never in Fritchii builds, which hide its
+/// settings (a value left on by an older build made the camera flicker, 2026-11-09).
+[[nodiscard]] bool FrameGenActive();
+[[nodiscard]] u32 FrameGenMultiplier();
 /// Whether emulation runs at the speed limit: use_speed_limit, and in Fritchii always for Ocarina
 /// of Time, whose logic speeds up with the frame rate ("Unlocked" made the game run fast). Not
 /// while Ocarina runs with its high refresh rate patch outside the 30 FPS mode: its step follows
@@ -1067,6 +1143,10 @@ void SetAppliedOcarinaRenderScale(std::optional<NvidiaDlssQuality> quality);
 /// game runs (Ctrl+U, FileSys::SwitchOotHighRefreshLive) sets it too.
 void SetOotHighRefreshPatched(bool patched);
 [[nodiscard]] bool OotHighRefreshPatched();
+
+[[nodiscard]] size_t FrameGenGenerations();
+
+[[nodiscard]] size_t FrameGenMaxGenerations();
 
 bool GetDebugKnobAt(u8 i);
 

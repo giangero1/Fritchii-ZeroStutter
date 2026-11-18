@@ -353,8 +353,8 @@ bool StreamlineDlssUpscaler::Upscale(const Inputs& in) {
                     VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
         };
 
-        // DLSS super resolution only reads the jitter, motion and depth conventions; it doesn't
-        // use the camera fields.
+        // DLSS super resolution only reads the jitter, motion and depth conventions; the camera
+        // fields are for frame generation, which this doesn't use.
         const f32 rw = static_cast<f32>(in.render_size.width);
         const f32 rh = static_cast<f32>(in.render_size.height);
         sl::Constants constants{};
