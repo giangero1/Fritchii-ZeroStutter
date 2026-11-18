@@ -4,7 +4,11 @@
 [![Release](https://img.shields.io/github/v/release/giangero1/Fritchii-ZeroStutter?color=brightgreen&label=Release)](https://github.com/giangero1/Fritchii-ZeroStutter/releases)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-**Fritchii Zero-Stutter** is a specialized high-performance fork of Fritchii engineered to eliminate shader/compute compilation freezes, disk cache stalls, and lighting regressions in *The Legend of Zelda: Ocarina of Time Remake* on PC — while bringing **full 120 FPS Multi-Engine Frame Generation** (including **NVIDIA Streamline DLSS-G + RTX 30-Series OpenDLSSG**) onto **Fritchii v6.0**.
+**Fritchii Zero-Stutter** is an unofficial, modified high-performance fork of Fritchii engineered to eliminate shader/compute compilation freezes, disk cache stalls, and lighting regressions in *The Legend of Zelda: Ocarina of Time Remake* on PC — while bringing **full 120 FPS Multi-Engine Frame Generation** (including **NVIDIA Streamline DLSS-G + RTX 30-Series OpenDLSSG**) onto **Fritchii v6.0**.
+
+![Fritchii v6.0 Zero-Stutter 4K DLSS Quality J + DLSS-G 2X FrameGen on RTX 3070](docs/fritchii-6.0-proof.jpg)
+
+* **Verified Performance (Temple Interior — Full 4K DLSS Quality J + DLSS-G 2X):** **105–107 FPS** (**53 Base Game FPS + 54 Generated Frames**), **94% GPU**, **34% CPU**, **0 ms latency overhead** (`1440p → 4K · DLSS`) on **RTX 3070 8GB + Ryzen 7 5800X3D**. Lowering output to **1440p** or **DLSS Balanced** locks **60 base + 60 generated = 120 FPS**.
 
 ---
 
@@ -51,6 +55,12 @@ Open `Play-Fritchii-6.0-ZeroStutter.cmd` (or `Tools > Switches` / `nx2_switches.
 2. Launch via **`Play-Fritchii-6.0-ZeroStutter.cmd`** (runs `fritchii.exe` with `GPL=false` and `EDEN_NX2_SPIRV_INLINE_GLOBALS=2`).
 3. **First Launch Note (v6.0):** Because v6.0 updated shader translation and renamed the main executable to `fritchii.exe`, allow the one-time **"Preparing shaders"** step to complete on first boot. Subsequent launches start fast with zero stutters.
 4. Right-click the **`FG`** button in the bottom status bar to toggle or switch between **DLSS-G**, **Optical Flow**, or **LSFG**.
+
+---
+
+## 📜 Credits & License Attribution
+* Built as an **unofficial modified fork** based on upstream Fritchii v6.0 (GNU GPLv3) and Lichii/Eden/yuzu contributors — not affiliated with or presented as Frizti's original release.
+* **Shader precompile system by Frizti (Fritchii)** *(per GPLv3 Section 7 attribution notice; proprietary `*.nx2recipe` files are not redistributed in this fork's packages)*.
 
 ---
 
