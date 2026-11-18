@@ -12,7 +12,6 @@
 #include "common/logging.h"
 #include "common/nx2_hitch.h"
 #include "common/nx2_timeline.h"
-#include "common/display_hdr.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "common/thread.h"
@@ -237,11 +236,11 @@ PresentManager::~PresentManager() {
         present_wait_thread.request_stop();
         present_wait_thread.join();
     }
-}
-
 #ifdef EGLANTINE_STREAMLINE
     Streamline::FrameGenSuspend();
 #endif
+}
+
 Frame* PresentManager::GetRenderFrame() {
 
     // The renderer waits for the present thread (tools/nx2/critical_path.py's table).

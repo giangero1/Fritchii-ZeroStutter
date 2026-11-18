@@ -80,6 +80,7 @@ class QtSoftwareKeyboardDialog;
 class QtNXWebEngineView;
 
 namespace VideoCore {
+enum class FrameGenState : u8;
 class ShaderNotify;
 }
 namespace Core {
@@ -480,6 +481,11 @@ private slots:
     void OnCheckForUpdates();
 #endif
 
+    /// Frames per second frame generation added since the last status bar update.
+    [[nodiscard]] double FrameGenFps() const {
+        return frame_gen_fps;
+    }
+
 private:
     void OnGameListNxTool(const std::string& game_path, void (NxTools::*tool)(const std::string&));
     void OnGameListEditNxMetadata(const std::string& game_path);
@@ -504,6 +510,7 @@ private:
     void UpdateAAText();
     void UpdatePostShaderText();
     void UpdateVolumeUI();
+    void UpdateFrameGenButton();
     void UpdateStatusBar();
     void UpdateGPUAccuracyButton();
     void UpdateStatusButtons();
@@ -599,6 +606,12 @@ private:
     QPushButton* filter_status_button = nullptr;
     QPushButton* aa_status_button = nullptr;
     QPushButton* post_shader_status_button = nullptr;
+    QPushButton* frame_gen_status_button = nullptr;
+    VideoCore::FrameGenState frame_gen_state{};
+    u64 frame_gen_frames = 0;
+    bool frame_gen_generating = false;
+    double frame_gen_fps = 0.0;
+    QElapsedTimer frame_gen_fps_timer;
     u64 dlss_evaluations = 0;
     QString dlss_status_text;
     VolumeButton* volume_button = nullptr;

@@ -21,6 +21,10 @@ public:
 
     void Reset();
 
+    [[nodiscard]] f32 SmoothedInterval() const {
+        return smoothed_interval;
+    }
+
 private:
     using Clock = std::chrono::steady_clock;
 
