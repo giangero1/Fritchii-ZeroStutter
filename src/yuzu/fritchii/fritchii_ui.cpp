@@ -161,8 +161,9 @@ bool ApplyTheme() {
 }
 
 bool HidesSetting(const std::string& label) {
-    // No frame generation in Fritchii (real frames only), and its options are dev tools.
-    return Enabled() && label.starts_with("frame_gen");
+    // Fritchii Zero-Stutter exposes Frame Generation controls (Streamline DLSS-G / OpenDLSSG /
+    // Optical Flow / LSFG) in Graphics settings; only hide the debug flow-dump switch.
+    return Enabled() && label == "frame_gen_dump_flow";
 }
 
 QIcon IconTinted(const QString& name, const QColor& color, int px) {
