@@ -763,8 +763,11 @@ void* ImageUserData(u64 padding) {
 //      large targets need, and one that lives long pins a 16 MiB block instead of 64.
 //  3 = both. Only where the memory sits changes; the images and their contents are the same.
 int DepthFitMode() {
+    // ZeroStutter: 3 (both) with the small card profile on: the depth pool held 250-400 MiB
+    // of holes in 64 MiB blocks on an 8 GB card, 30-90 MiB with it.
     return VideoCore::Nx2Debug::SwitchValue(VideoCore::Nx2Debug::g_depth_pool_fit,
-                                            "FRITCHII_DEPTH_POOL_FIT");
+                                            "FRITCHII_DEPTH_POOL_FIT",
+                                            VideoCore::SmallCard::Active() ? 3 : 0);
 }
 
 /// Size class: up to the next quarter of the power of two below `size` (at least 4 KiB steps),

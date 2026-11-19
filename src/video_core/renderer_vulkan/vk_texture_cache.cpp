@@ -6210,15 +6210,18 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
             astc_deferrals_in_a_row = 0;
         }
         // Only the decodes already in flight count: one texture over the cap by itself (an
-        // 850 MiB decode) still goes, so a load always moves on. And after 32 deferrals with
-        // none finished it lets them through: each deferral uploads the texture again and
-        // that staging memory is freed only at a frame's end (a 20 s load without one grew it
-        // to 15 GB of system RAM and crashed).
+        // 850 MiB decode) still goes, so a load always moves on. And one texture in 33 goes
+        // even with none finished: each deferral uploads the texture again and that staging
+        // memory is freed only at a frame's end (a 20 s load without one grew it to 15 GB of
+        // system RAM and crashed). Letting all through after 32 instead took the decodes in
+        // flight to 1.65 GB in Hyrule Field's load (248 textures).
         u64 in_flight{};
         for (const PendingTranscode& t : pending_transcodes) {
             in_flight += scratch_bytes(t.width, t.height, t.levels, t.layers);
         }
-        if (in_flight >= scratch_cap && astc_deferrals_in_a_row < 32) {
+        if (in_flight >= scratch_cap && astc_deferrals_in_a_row >= 32) {
+            astc_deferrals_in_a_row = 0;
+        } else if (in_flight >= scratch_cap) {
             ++astc_deferrals_in_a_row;
             static u64 throttles{};
             ++throttles;

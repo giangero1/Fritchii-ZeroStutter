@@ -1424,8 +1424,12 @@ void TextureCache<P>::BudgetControl() {
         const int headroom_mib = VideoCore::Nx2Debug::SwitchValue(
             VideoCore::Nx2Debug::g_vram_headroom_mib, "FRITCHII_VRAM_HEADROOM_MIB", 0);
         // Auto: 1/16 of the budget, 256 MiB to 1 GiB (~950 MiB on a 16 GB card, ~450 on 8 GB).
-        const u64 headroom = headroom_mib > 0
-                                 ? u64{static_cast<u32>(headroom_mib)} << 20
+        // ZeroStutter: 1 GiB with the small card profile on, so an area load has room to land
+        // (8 GB RTX 3070, 1440p -> 4K DLSS + frame generation, a browser open: ~450 MiB left
+        // the field's +2.3 GB load over the budget for 10-20 s).
+        const u64 headroom = headroom_mib > 0 ? u64{static_cast<u32>(headroom_mib)} << 20
+                             : VideoCore::SmallCard::Active()
+                                 ? u64{1_GiB}
                                  : std::clamp(budget / 16, u64{256_MiB}, u64{1_GiB});
         // FRITCHII_VRAM_LOAD_GUARD: during a surge the target sits a reserve lower.
         const u64 surge_reserve = surge ? GuardReserve : 0;
@@ -1590,6 +1594,210 @@ void TextureCache<P>::EnforceCriticalAtCreate(u64 incoming) {
     }
     if (total_used_memory + incoming > critical_memory) {
         ++stats.short_of;
+    }
+}
+
+template <class P>
+void TextureCache<P>::DrainSparseBlocks() {
+    // FRITCHII_VRAM_DRAIN (boot, default 1; 0 off; ZeroStutter). Images share device memory
+    // blocks (32-64 MiB); a block goes back to the driver only once every image in it is gone.
+    // The collector deletes by age, so deleted images leave holes and blocks seldom empty: OoT
+    // on an 8 GB RTX 3070 (1440p -> 4K DLSS + frame generation, a browser open) held 365-512
+    // MiB of holes in ~80-110 texture blocks after a few area changes, which the driver counts
+    // as used. An area load then had ~1.2 GB of room for the ~1.5 GB it adds; Windows moved
+    // memory to system RAM and the game ran at ~22 fps for 18 s. So every 500 ms near the
+    // budget, blocks at most 40% full whose images are all clean (nothing the GPU wrote: they
+    // load again from guest memory), idle and not bound are emptied whole, emptiest first.
+    // A block keeping any other image is left alone: deleting part of it frees nothing.
+    if constexpr (requires(const Image& img) { img.MemoryBlock(); } &&
+                  requires(u64 value) { runtime.MainHeapNumbers(value, value, value); }) {
+        static const bool enabled = [] {
+            const char* value = std::getenv("FRITCHII_VRAM_DRAIN");
+            return value == nullptr || value[0] != '0';
+        }();
+        if (!enabled) {
+            return;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        // During a load surge (FRITCHII_VRAM_LOAD_GUARD) the old area's images go at once: going
+        // from Castle Town to Hyrule Field left ~1.2-1.5 GB of town images idle while the field
+        // added ~2.3 GB within a second (4.7 -> 7.0 GB of a 6.9 GB budget, a browser open), so
+        // its images found no holes and took new blocks past the budget. Clean images idle for
+        // 30+ frames (the old area's: the load's frames are few and long) are deleted, up to
+        // 1 GiB, once per surge; the new area's images then fill their holes.
+        const bool surge = now < load_guard_until && drain_surge_seen != load_guard_surges;
+        if (surge) {
+            drain_surge_seen = load_guard_surges;
+            const u64 idle = (std::max)(u64{30}, (std::min)(thrash_floor, u64{120}));
+            std::array<ImageId, NUM_RT + 1> surge_bound{};
+            const auto surge_bound_image = [this](ImageViewId view_id) {
+                return view_id != NULL_IMAGE_VIEW_ID && view_id != ImageViewId{}
+                           ? slot_image_views[view_id].image_id
+                           : ImageId{};
+            };
+            for (size_t index = 0; index < NUM_RT; ++index) {
+                surge_bound[index] = surge_bound_image(render_targets.color_buffer_ids[index]);
+            }
+            surge_bound[NUM_RT] = surge_bound_image(render_targets.depth_buffer_id);
+            std::vector<ImageId> victims;
+            u64 victim_bytes{};
+            constexpr u64 SurgeMaxBytes = u64{1} << 30;
+            constexpr size_t SurgeMaxImages = 2048;
+            if (frame_tick > idle) {
+                lru_cache.ForEachItemBelow(frame_tick - idle, [&](ImageId image_id) {
+                    const Image& image = slot_images[image_id];
+                    if (False(image.flags &
+                              (ImageFlagBits::IsDecoding | ImageFlagBits::CollectPending |
+                               ImageFlagBits::GpuModified | ImageFlagBits::BadOverlap)) &&
+                        !IsDownloadable(image) &&
+                        std::ranges::find(surge_bound, image_id) == surge_bound.end()) {
+                        victims.push_back(image_id);
+                        victim_bytes += image.MemoryBlock().size;
+                    }
+                    return victim_bytes >= SurgeMaxBytes || victims.size() >= SurgeMaxImages;
+                });
+            }
+            if (!victims.empty()) {
+                const DeleteReasonScope surge_reason{*this, DeleteReason::GarbageCollect};
+                for (const ImageId image_id : victims) {
+                    auto& image = slot_images[image_id];
+                    MarkStale(image); // before UntrackImage (see MarkStale)
+                    if (True(image.flags & ImageFlagBits::Tracked)) {
+                        UntrackImage(image, image_id);
+                    }
+                    ++(True(image.flags & ImageFlagBits::CostlyLoad) ? gc_costly_deletes
+                                                                     : gc_deletes);
+                    UnregisterImage(image_id);
+                    DeleteImage(image_id, image.scale_tick > frame_tick + 5);
+                }
+                drain_surge_images += victims.size();
+                drain_surge_bytes += victim_bytes;
+                LOG_INFO(HW_GPU,
+                         "VRAM drain (FRITCHII_VRAM_DRAIN): load surge {}: deleted {} clean "
+                         "images idle {}+ frames ({} MiB) for the new area; session {} images, "
+                         "{} MiB",
+                         load_guard_surges, victims.size(), idle, victim_bytes >> 20,
+                         drain_surge_images, drain_surge_bytes >> 20);
+            }
+        }
+        if (now - drain_time < std::chrono::milliseconds{500}) {
+            return;
+        }
+        drain_time = now;
+        u64 heap_size{};
+        u64 usage{};
+        u64 budget{};
+        if (!runtime.MainHeapNumbers(heap_size, usage, budget) || budget == 0 ||
+            usage * 100 < budget * 70) {
+            return;
+        }
+        // Idle long enough that the scene moved on (and never inside the thrash guard's floor);
+        // ASTC images cost a GPU decode to load again, so they wait longer.
+        const u64 idle_normal = (std::max)(u64{180}, thrash_floor);
+        const u64 idle_costly = (std::max)(u64{600}, thrash_floor);
+        std::array<ImageId, NUM_RT + 1> bound{};
+        const auto bound_image = [this](ImageViewId view_id) {
+            return view_id != NULL_IMAGE_VIEW_ID && view_id != ImageViewId{}
+                       ? slot_image_views[view_id].image_id
+                       : ImageId{};
+        };
+        for (size_t index = 0; index < NUM_RT; ++index) {
+            bound[index] = bound_image(render_targets.color_buffer_ids[index]);
+        }
+        bound[NUM_RT] = bound_image(render_targets.depth_buffer_id);
+
+        struct Block {
+            u64 block_size{};
+            u64 image_bytes{};
+            bool drainable{true};
+            std::vector<ImageId> images;
+        };
+        std::unordered_map<u64, Block> blocks;
+        for (const auto [image_id, image] : slot_images) {
+            const auto mem = image->MemoryBlock();
+            if (mem.block == 0 || mem.block_size == 0) {
+                continue; // memory of its own: it goes back when the image does
+            }
+            Block& block = blocks[mem.block];
+            block.block_size = mem.block_size;
+            block.image_bytes += mem.size;
+            if (!block.drainable) {
+                continue;
+            }
+            const bool costly = True(image->flags & ImageFlagBits::CostlyLoad);
+            const u64 idle = costly ? idle_costly : idle_normal;
+            const bool clean =
+                False(image->flags & (ImageFlagBits::IsDecoding | ImageFlagBits::CollectPending |
+                                      ImageFlagBits::GpuModified | ImageFlagBits::BadOverlap)) &&
+                !IsDownloadable(*image);
+            const bool old = frame_tick > idle && image->last_use_tick + idle < frame_tick;
+            if (!clean || !old || std::ranges::find(bound, image_id) != bound.end()) {
+                block.drainable = false;
+                block.images.clear();
+                continue;
+            }
+            block.images.push_back(image_id);
+        }
+        std::vector<std::pair<double, u64>> order;
+        for (const auto& [key, block] : blocks) {
+            if (block.drainable && !block.images.empty() &&
+                block.image_bytes * 10 <= block.block_size * 4) {
+                order.emplace_back(static_cast<double>(block.image_bytes) /
+                                       static_cast<double>(block.block_size),
+                                   key);
+            }
+        }
+        if (order.empty()) {
+            return;
+        }
+        std::ranges::sort(order);
+        constexpr size_t MaxImagesPerPass = 128;
+        constexpr u64 MaxBlockBytesPerPass = u64{512} << 20;
+        size_t deleted{};
+        u64 reclaimed{};
+        u64 freed_images{};
+        u64 blocks_done{};
+        const DeleteReasonScope delete_reason_scope{*this, DeleteReason::GarbageCollect};
+        for (const auto& [fill, key] : order) {
+            const Block& block = blocks[key];
+            if (deleted + block.images.size() > MaxImagesPerPass ||
+                reclaimed >= MaxBlockBytesPerPass) {
+                break;
+            }
+            for (const ImageId image_id : block.images) {
+                auto& image = slot_images[image_id];
+                MarkStale(image); // before UntrackImage (see MarkStale)
+                if (True(image.flags & ImageFlagBits::Tracked)) {
+                    UntrackImage(image, image_id);
+                }
+                ++(True(image.flags & ImageFlagBits::CostlyLoad) ? gc_costly_deletes
+                                                                 : gc_deletes);
+                UnregisterImage(image_id);
+                DeleteImage(image_id, image.scale_tick > frame_tick + 5);
+                ++deleted;
+            }
+            reclaimed += block.block_size;
+            freed_images += block.image_bytes;
+            ++blocks_done;
+        }
+        if (blocks_done == 0) {
+            return;
+        }
+        ++drain_passes;
+        drain_blocks += blocks_done;
+        drain_images += deleted;
+        drain_block_bytes += reclaimed;
+        drain_image_bytes += freed_images;
+        if (drain_passes <= 10 || now - drain_logged >= std::chrono::seconds{10}) {
+            drain_logged = now;
+            LOG_INFO(HW_GPU,
+                     "VRAM drain (FRITCHII_VRAM_DRAIN): heap {} of {} MiB; emptied {} blocks "
+                     "({} MiB) by deleting {} idle clean images ({} MiB); session {} blocks, "
+                     "{} MiB, {} images in {} passes",
+                     usage >> 20, budget >> 20, blocks_done, reclaimed >> 20, deleted,
+                     freed_images >> 20, drain_blocks, drain_block_bytes >> 20, drain_images,
+                     drain_passes);
+        }
     }
 }
 
@@ -2056,6 +2264,7 @@ void TextureCache<P>::TickFrame() {
     // FRITCHII_VRAM_BUDGET_MODE / FRITCHII_VRAM_OWNERS: once a second / every 10 s, with the
     // usage just read (the collector below already sees a moved cap).
     BudgetControl();
+    DrainSparseBlocks();
     LogVramOwners();
     // EDEN_NX2_MEM_TRACE=1 (ported): every 2 s, what the cache holds next to
     // what the process and the driver report (memory climbs).

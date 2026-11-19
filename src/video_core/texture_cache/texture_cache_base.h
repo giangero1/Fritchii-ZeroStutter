@@ -1520,6 +1520,20 @@ private:
     /// FRITCHII_TC_CRITICAL_ENFORCE (live): before an image of about `incoming` bytes is made
     /// past the critical memory, clean images idle 10+ frames are deleted (no downloads).
     void EnforceCriticalAtCreate(u64 incoming);
+    /// FRITCHII_VRAM_DRAIN (boot, default 1; ZeroStutter): empties sparse device memory blocks
+    /// whose images can all be loaded again from guest memory, so the blocks go back.
+    void DrainSparseBlocks();
+    std::chrono::steady_clock::time_point drain_time{};
+    std::chrono::steady_clock::time_point drain_logged{};
+    u64 drain_passes{};
+    u64 drain_blocks{};
+    u64 drain_images{};
+    u64 drain_block_bytes{};
+    u64 drain_image_bytes{};
+    /// FRITCHII_VRAM_DRAIN: the load guard's surge the old area's images were last cleared for.
+    u64 drain_surge_seen{};
+    u64 drain_surge_images{};
+    u64 drain_surge_bytes{};
     /// FRITCHII_TC_THRASH_GUARD (live): notes a deleted image, recognises one made again, and
     /// once a second sets how recently used an image the collector must leave alone.
     void NoteThrashDelete(const Image& image);
