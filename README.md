@@ -47,6 +47,24 @@ An area load in OoT (Castle Town → Hyrule Field) used to push VRAM from ~5 GB 
 | Peak VRAM during a load | 9.9 GB (budget 7.1) | ~7.0 GB |
 | Low FPS after a load | 10–20 s at 4–7 FPS | **1–2 s** on 7 of 8 loads, ~6 s worst |
 
+**Tester reports: 6 GB cards.**
+
+![Kakariko Village on an RTX 2060 6 GB + i5-8500 at 1440p: upstream v6.2 on the left (24 FPS, 0.0 GB VRAM free, limited by sync) vs v6.2 Zero-Stutter on the right (36 FPS, 0.6 GB VRAM free)](docs/fritchii-6.2-rtx2060-6gb-comparison.webp)
+
+* **RTX 2060 6 GB + i5-8500, Kakariko Village, 1440p** (screenshot above, left is upstream v6.2, right is Zero-Stutter):
+
+  | | Upstream v6.2 | v6.2 Zero-Stutter |
+  | :--- | :--- | :--- |
+  | FPS (1% low) | 24 (10) | **36 (25)** |
+  | Frame time | 42.0 ms | **27.9 ms** |
+  | VRAM used / free | 5.0 GB / **0.0 GB free** | 4.5 GB / **0.6 GB free** |
+  | System RAM used | 11.2 GB | **7.4 GB** |
+  | Bottleneck | Limited by sync | Limited by back |
+
+* **Another 6 GB card:** after one restart, the visual bugs were gone. FPS was 27–35 in Castle Town Market and above 40 in other areas. They reported much more stable frame times, a lot less stuttering, and no more audio stutter.
+
+The VRAM changes were made for 8 GB cards, but they help on 6 GB too. Upstream runs the 6 GB card out of VRAM (0.0 GB free). The extra ~4 GB of system RAM it uses is most likely Windows paging that memory out.
+
 ### 5. Preloading all shaders is now off (`EDEN_NX2_PRELOAD_ALL_PIPELINES=0`)
 * Building all ~19k cached shaders at boot kept them all in driver memory (~0.45 MB each), which by itself overflowed 8 GB cards in new areas. Now the **~7.5k shaders you actually use** are built at boot ("Preparing shaders 7,477"). The rest build on demand from the driver cache in a few ms each. **You should still download the shader pack below.** It's what makes those on-demand builds instant.
 
