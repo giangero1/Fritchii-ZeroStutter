@@ -85,7 +85,7 @@ The VRAM changes were made for 8 GB cards, but they help on 6 GB too. Upstream r
 ### 2. `GuessMissing` Disk Pipeline Cache Fallback
 * `env.SetGuessMissing(&guess)` in `vk_pipeline_cache.cpp` lets pipelines with unrecorded constant buffer descriptors load from the disk cache instead of being discarded.
 
-### 3. Full Multi-Engine Frame Generation (since v6.0)
+### 3. Full Multi-Engine Frame Generation (since v5.9)
 * **RTX 30-series DLSS-G** through OpenDLSSG + FakeNVAPI (`version.dll`, `opendlssg.ini`, `fakenvapi.dll`, `nvapi64.dll`, `nvngx_dlssg.dll`) with the Streamline error-32 bypass, plus native Vulkan FSR 3.1 optical flow and LSFG. Right-click **`FG`** on the status bar to switch.
 
 ![Fritchii Zero-Stutter 4K 127 FPS — 1440p to 4K DLSS Quality J + DLSS-G 2X on RTX 3070](docs/fritchii-6.0-4k-127fps.png)
