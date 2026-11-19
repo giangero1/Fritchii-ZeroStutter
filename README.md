@@ -47,6 +47,13 @@ An area load in OoT (Castle Town → Hyrule Field) used to push VRAM from ~5 GB 
 | Peak VRAM during a load | 9.9 GB (budget 7.1) | ~7.0 GB |
 | Low FPS after a load | 10–20 s at 4–7 FPS | **1–2 s** on 7 of 8 loads, ~6 s worst |
 
+![Fritchii v6.2 Zero-Stutter on an RTX 3070 8 GB + Ryzen 7 5800X3D: 1440p → 4K DLSS Quality J + DLSS-G 2X, 131 FPS (58 game + 56 generated)](docs/fritchii-6.2-rtx3070-4k-131fps.webp)
+
+* **RTX 3070 8 GB + Ryzen 7 5800X3D, Castle Town ruins (adult), 1440p → 4K DLSS Quality J + DLSS-G 2X:**
+  * **131 FPS** on screen: **58 game FPS** (1% low 53) + 56 generated, 17.6 ms frame time, 0 ms added latency.
+  * GPU 93–97% busy, CPU 34–43%, **limited by GPU**: the CPU/sync is no longer the bottleneck.
+  * 5.1 GB VRAM used with **2.0 GB free**, 10.5 GB system RAM.
+
 **Tester reports: 6 GB cards.**
 
 ![Kakariko Village on an RTX 2060 6 GB + i5-8500 at 1440p: upstream v6.2 on the left (24 FPS, 0.0 GB VRAM free, limited by sync) vs v6.2 Zero-Stutter on the right (36 FPS, 0.6 GB VRAM free)](docs/fritchii-6.2-rtx2060-6gb-comparison.webp)
