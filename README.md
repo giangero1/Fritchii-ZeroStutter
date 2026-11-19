@@ -70,13 +70,14 @@ An area load in OoT (Castle Town → Hyrule Field) used to push VRAM from ~5 GB 
 
 ---
 
-## 💾 Pre-Warmed 28,612 Shader Cache (`fork-v54`)
+## 💾 Pre-Warmed Shader Cache (`fork-v54`)
 
 Still recommended for v6.2. The used list builds at boot, and everything else builds instantly from this cache on demand:
-- 🔗 **Primary Mirror (Google Drive):** [Download Verified 28,612 Shaders](https://drive.google.com/file/d/1pa3T-D7lTcuo9B1RHP1HoejbtdUDqS6O/view)
-- 🔗 **Alternative Mirror (Gofile):** [Download via Gofile Mirror](https://gofile.io/d/GBTsYoTL)
+- 🔗 **Download:** [`fritchii-fork-v54-shader-cache.zip`](https://github.com/giangero1/Fritchii-ZeroStutter/releases/download/v6.2-zerostutter/fritchii-fork-v54-shader-cache.zip) (450 MB, on the v6.2 release page)
 
-Extract `vulkan-frizti.fork-v54.bin` and `vulkan_used-frizti.fork-v54.bin` into:
+*The old Google Drive / Gofile links held `fork-v52`/`fork-v53` files from v5.9 and have been removed. v6.x needs `fork-v54`.*
+
+The zip already has the right folders: extract it straight into your emulator folder (next to `fritchii.exe`), or put `vulkan-frizti.fork-v54.bin` and `vulkan_used-frizti.fork-v54.bin` into:
 ```text
 fritchii-v6.2-zerostutter-win64/
 ├── Play-Fritchii-6.2-ZeroStutter.cmd
