@@ -452,6 +452,8 @@ public:
     std::deque<PendingTranscode> pending_transcodes;
     /// Decode images the GPU is done with, for the next texture of the same shape.
     std::vector<PendingTranscode> free_transcodes;
+    /// FRITCHII_ASTC_SCRATCH_CAP_MIB: textures deferred since a decode last finished.
+    u32 astc_deferrals_in_a_row{};
 
     std::optional<BlockLinearUnswizzle3DPass> bl3d_unswizzle_pass;
     const Settings::ResolutionScalingInfo& resolution;
@@ -575,6 +577,7 @@ public:
     u32 vram_trim_events{};  ///< trims that gave memory back, this session
     u64 vram_trim_bytes{};   ///< what they gave back, this session
     std::chrono::steady_clock::time_point vram_trim_logged{};
+    std::chrono::steady_clock::time_point vram_trim_checked{}; ///< last trim check
     static constexpr u64 ImagePoolMaxFrames = 180;
     std::deque<PooledImage> image_pool;
     u64 image_pool_bytes{};

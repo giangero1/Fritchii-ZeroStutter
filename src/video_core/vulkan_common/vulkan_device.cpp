@@ -1296,6 +1296,24 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     if (extensions.memory_budget) {
         flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
     }
+    // FRITCHII_VRAM_PRIORITY (boot, default 1; ZeroStutter): pass each allocation's priority
+    // to the driver (VK_EXT_memory_priority). Past the budget (an area load: +4 GB within a
+    // second on an 8 GB card at 1440p -> 4K DLSS + frame generation) Windows moves memory to
+    // system RAM; without priorities it moved render targets as readily as cold textures and
+    // the card ran at 4-12 fps for 10+ s while they came back. Render targets and depth ask
+    // to stay (1.0), textures and device buffers keep the default (0.5), host-side staging
+    // goes first (0.2). 0 = all memory the same priority, as before.
+    {
+        const char* value = std::getenv("FRITCHII_VRAM_PRIORITY");
+        const bool want = value == nullptr || value[0] != '0';
+        if (want && extensions.memory_priority) {
+            flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT;
+        }
+        LOG_INFO(Render_Vulkan, "FRITCHII_VRAM_PRIORITY: memory priorities {}",
+                 !want ? "off (switch)"
+                       : extensions.memory_priority ? "on (VK_EXT_memory_priority)"
+                                                    : "unavailable (no VK_EXT_memory_priority)");
+    }
     if (extensions.buffer_device_address) {
         flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
     }
@@ -1584,7 +1602,8 @@ VmaPool Device::GetSeparatePool(VmaAllocator owner, SeparatePool kind, u32 memor
                                                              : SeparatePoolBlockSize,
             .minBlockCount = 0,
             .maxBlockCount = 0,
-            .priority = 0.f,
+            // FRITCHII_VRAM_PRIORITY: the default priority (0.f was the lowest).
+            .priority = 0.5f,
             .minAllocationAlignment = 0,
             .pMemoryAllocateNext = nullptr,
         };
@@ -2471,6 +2490,13 @@ void Device::RemoveUnsuitableExtensions() {
     RemoveExtensionFeatureIfUnsuitable(extensions.border_color_swizzle,
                                        features.border_color_swizzle,
                                        VK_EXT_BORDER_COLOR_SWIZZLE_EXTENSION_NAME);
+
+    // VK_EXT_memory_priority (FRITCHII_VRAM_PRIORITY): lets VMA tell the driver which memory
+    // to keep in VRAM when the process is over its budget.
+    extensions.memory_priority =
+        extensions.memory_priority && features.memory_priority.memoryPriority;
+    RemoveExtensionFeatureIfUnsuitable(extensions.memory_priority, features.memory_priority,
+                                       VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME);
 
     // VK_EXT_depth_bias_control
     extensions.depth_bias_control =

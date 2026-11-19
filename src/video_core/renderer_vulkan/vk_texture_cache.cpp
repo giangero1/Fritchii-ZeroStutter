@@ -3349,9 +3349,14 @@ void TextureCacheRuntime::TickVramTrim() {
     // sparse and buffer pools: up to 32-64 MiB each). VMA frees them by itself only once the
     // usage passed the budget, when Windows may already be moving memory to system RAM. The
     // memory held nothing; the cost is a driver allocation if that vector needs a block again.
-    if (vram_trim_frames++ % 60 != 0) {
+    // ZeroStutter: or 250 ms of wall time, whichever comes first. After an area load the game
+    // ran at 4-7 fps, so 60 frames were 10-15 s with the empty blocks kept the whole time.
+    const auto trim_now = std::chrono::steady_clock::now();
+    const bool trim_frames = vram_trim_frames++ % 60 == 0;
+    if (!trim_frames && trim_now - vram_trim_checked < std::chrono::milliseconds{250}) {
         return;
     }
+    vram_trim_checked = trim_now;
     const int value = VideoCore::Nx2Debug::SwitchValue(VideoCore::Nx2Debug::g_vram_trim,
                                                        "FRITCHII_VRAM_TRIM", 1);
     u64 percent = 0;
@@ -6161,6 +6166,77 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
     const u32 height = info.size.height;
     const u32 levels = static_cast<u32>(info.resources.levels);
     const u32 layers = static_cast<u32>(info.resources.layers);
+
+    // FRITCHII_ASTC_SCRATCH_CAP_MIB (boot, default 512, 0 = no cap; ZeroStutter): each texture
+    // decodes into an RGBA8 image 4-8x the size of its BCn result, freed only once the GPU ran
+    // the frame. An area load (OoT on an 8 GB RTX 3070, 1440p -> 4K DLSS + frame generation)
+    // decoded ~800 textures in one 0.76 s frame: usage went 4.8 -> 9.9 GB of a 7.1 GB budget,
+    // Windows moved memory to system RAM and the card ran at 4 fps for 10+ s after usage was
+    // back under the budget. Past the cap a texture waits for a later frame (as when no memory
+    // is left), so the load spreads over a few more frames but stays in VRAM.
+    static const u64 scratch_cap = [] {
+        const char* value = std::getenv("FRITCHII_ASTC_SCRATCH_CAP_MIB");
+        const u64 mib = value != nullptr ? std::strtoull(value, nullptr, 10) : 512;
+        return mib << 20;
+    }();
+    const auto scratch_bytes = [](u32 w, u32 h, u32 lv, u32 ly) {
+        u64 bytes{};
+        for (u32 level = 0; level < lv; ++level) {
+            bytes += u64{(std::max)(w >> level, 1U)} * (std::max)(h >> level, 1U) * 4;
+        }
+        return bytes * ly;
+    };
+    if (scratch_cap != 0 && !pending_transcodes.empty()) {
+        // Decodes the GPU finished go now, not at the frame's end: a load can run for seconds
+        // without one (OoT's Hyrule Field: 20 s with 0 frames).
+        static constexpr u64 MaxFreeBytes = u64{256} << 20;
+        u64 free_bytes{};
+        for (const PendingTranscode& t : free_transcodes) {
+            free_bytes += scratch_bytes(t.width, t.height, t.levels, t.layers);
+        }
+        bool retired = false;
+        while (!pending_transcodes.empty() && scheduler.IsFree(pending_transcodes.front().tick)) {
+            PendingTranscode& done = pending_transcodes.front();
+            const u64 bytes = scratch_bytes(done.width, done.height, done.levels, done.layers);
+            if (free_bytes + bytes <= MaxFreeBytes) {
+                done.unused_frames = 0;
+                free_bytes += bytes;
+                free_transcodes.push_back(std::move(done));
+            }
+            pending_transcodes.pop_front();
+            retired = true;
+        }
+        if (retired) {
+            astc_deferrals_in_a_row = 0;
+        }
+        // Only the decodes already in flight count: one texture over the cap by itself (an
+        // 850 MiB decode) still goes, so a load always moves on. And after 32 deferrals with
+        // none finished it lets them through: each deferral uploads the texture again and
+        // that staging memory is freed only at a frame's end (a 20 s load without one grew it
+        // to 15 GB of system RAM and crashed).
+        u64 in_flight{};
+        for (const PendingTranscode& t : pending_transcodes) {
+            in_flight += scratch_bytes(t.width, t.height, t.levels, t.layers);
+        }
+        if (in_flight >= scratch_cap && astc_deferrals_in_a_row < 32) {
+            ++astc_deferrals_in_a_row;
+            static u64 throttles{};
+            ++throttles;
+            if (throttles <= 20 || throttles % 100 == 0) {
+                LOG_INFO(Render_Vulkan,
+                         "ASTC scratch cap (FRITCHII_ASTC_SCRATCH_CAP_MIB): {} MiB of decode "
+                         "images in flight ({} textures); this one waits for a later frame (deferred {})",
+                         in_flight >> 20, pending_transcodes.size(), throttles);
+            }
+            // Not a wait here: the caller's staging data for this texture would count as
+            // done and could be handed out again before the decode reads it (wrong
+            // textures). Like the no-memory case below: upload it again when next used,
+            // after the GPU ran these decodes and their images were reused or freed.
+            image.flags |= VideoCommon::ImageFlagBits::CpuModified;
+            TransitionImageLayout(image);
+            return;
+        }
+    }
     // The BC encoder declares layout(rgba8). Identical byte layout is not enough:
     // its storage image view must have the matching R8G8B8A8_UNORM format.
     constexpr VkFormat DecodeFormat = VK_FORMAT_R8G8B8A8_UNORM;

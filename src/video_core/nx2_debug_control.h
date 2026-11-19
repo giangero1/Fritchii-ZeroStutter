@@ -296,6 +296,8 @@ inline std::atomic<int> g_vram_owners{-1};
 inline std::atomic<int> g_vram_pack{-1};
 /// FRITCHII_VRAM_TRIM: docs/fritchii/switches.md (0 off, 1 auto, 2-100 percent of the budget).
 inline std::atomic<int> g_vram_trim{-1};
+/// FRITCHII_VRAM_LOAD_GUARD (live, default 1; ZeroStutter): area-load surge guard, 0 off.
+inline std::atomic<int> g_vram_load_guard{-1};
 /// FRITCHII_DEPTH_POOL_FIT: docs/fritchii/switches.md (bits: 1 size classes, 2 small depth pool).
 inline std::atomic<int> g_depth_pool_fit{-1};
 /// FRITCHII_VRAM_HOLES: docs/fritchii/switches.md (1 = hole and pinner histograms in the owners line).

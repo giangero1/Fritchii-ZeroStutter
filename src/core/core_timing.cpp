@@ -59,7 +59,8 @@ void SpinPause() {
 /// zortos293/Lichii #1733 (a fifth of the thread's time, 2 ms of burst).
 int SpinBudgetPercent() {
     return VideoCore::Nx2Debug::SwitchValue(VideoCore::Nx2Debug::g_hosttiming_spin_budget,
-                                            "FRITCHII_HOSTTIMING_SPIN_BUDGET");
+                                            "FRITCHII_HOSTTIMING_SPIN_BUDGET",
+                                            20); // ZeroStutter: zortos #1733 budget by default
 }
 constexpr s64 SpinBurstNs = 2'000'000;
 
@@ -83,7 +84,7 @@ void PlaceTimerSpin() {
     static int applied_mode = 0;         // the mode the thread's mask follows
     static u32 applied_generation = ~0U; // mode 1: the pinned set it was placed for
     const int mode = VideoCore::Nx2Debug::SwitchValue(VideoCore::Nx2Debug::g_hosttiming_off_gpu,
-                                                      "FRITCHII_HOSTTIMING_OFF_GPU") != 0
+                                                      "FRITCHII_HOSTTIMING_OFF_GPU", 1) != 0
                          ? 1
                          : 0;
     const auto log_place = [](const char* why, u64 mask, u64 gpu) {
@@ -130,7 +131,8 @@ void PlaceTimerSpin() {
 
 int TimerPriorityMode() {
     return VideoCore::Nx2Debug::SwitchValue(VideoCore::Nx2Debug::g_hosttiming_priority,
-                                            "FRITCHII_HOSTTIMING_PRIORITY");
+                                            "FRITCHII_HOSTTIMING_PRIORITY",
+                                            1); // ZeroStutter: time critical by default
 }
 
 /// On the timer thread: applies FRITCHII_HOSTTIMING_PRIORITY when it changed. Off: one relaxed

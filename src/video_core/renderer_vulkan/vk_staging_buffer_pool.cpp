@@ -568,6 +568,62 @@ void StagingBufferPool::TickFrame() {
     ReleaseCache(MemoryUsage::DeviceLocal);
     ReleaseCache(MemoryUsage::Upload);
     ReleaseCache(MemoryUsage::Download);
+
+    // FRITCHII_STAGING_PRESSURE_PURGE (boot, default 1; ZeroStutter): the sweep above frees a
+    // size level every 64 frames, at most 16 buffers each time. An area load (OoT, 8 GB RTX 3070
+    // at 1440p -> 4K DLSS + frame generation) left 1.0 GB of idle staging buffers with the heap
+    // near its budget; the card then ran at 4 fps, so 64 frames took 16 s and the memory stayed,
+    // which kept it at 4 fps: 12 s until the sweep caught up (fps came back the second the pool
+    // fell from 1236 to 363 MiB). So every 250 ms of wall time, within 1 GiB of the budget less
+    // its headroom and with 128 MiB or more idle (the GPU done with it), every idle staging
+    // buffer goes now. Buffers the GPU still used at one check go at a later one.
+    static const bool pressure_purge = [] {
+        const char* value = std::getenv("FRITCHII_STAGING_PRESSURE_PURGE");
+        return value == nullptr || value[0] != '0';
+    }();
+    if (pressure_purge) {
+        using namespace Common::Literals;
+        const auto now = std::chrono::steady_clock::now();
+        if (now - pressure_check_time >= std::chrono::milliseconds{250}) {
+            pressure_check_time = now;
+            u64 heap_size{};
+            u64 usage{};
+            u64 budget{};
+            if (device.MainHeapNumbers(heap_size, usage, budget) && budget != 0) {
+                const u64 headroom = std::clamp(budget / 16, u64{256_MiB}, u64{1_GiB});
+                const u64 line = budget - (std::min)(budget, headroom + 1_GiB);
+                u64 idle{};
+                for (StagingBuffersCache* cache :
+                     {&device_local_cache, &upload_cache, &download_cache}) {
+                    for (size_t level = 0; level < NUM_LEVELS; ++level) {
+                        for (const StagingBuffer& entry : (*cache)[level].entries) {
+                            if (clock.IsFree(entry.tick)) {
+                                idle += u64{1} << level;
+                            }
+                        }
+                    }
+                }
+                if (usage >= line && idle >= 128_MiB) {
+                    const u64 cached = CachedBytes(MemoryUsage::DeviceLocal) +
+                                       CachedBytes(MemoryUsage::Upload) +
+                                       CachedBytes(MemoryUsage::Download);
+                    const size_t freed = ReleaseIdleBuffers();
+                    const u64 left = CachedBytes(MemoryUsage::DeviceLocal) +
+                                     CachedBytes(MemoryUsage::Upload) +
+                                     CachedBytes(MemoryUsage::Download);
+                    ++pressure_purges;
+                    if (pressure_purges <= 20 || pressure_purges % 50 == 0) {
+                        LOG_INFO(Render_Vulkan,
+                                 "Staging purge (FRITCHII_STAGING_PRESSURE_PURGE): heap {} of "
+                                 "{} MiB budget; freed {} idle staging buffers, cached {} -> {} "
+                                 "MiB (purge {})",
+                                 usage >> 20, budget >> 20, freed, cached >> 20, left >> 20,
+                                 pressure_purges);
+                    }
+                }
+            }
+        }
+    }
     recycler.TickFrame();
     if (upload_ring) {
         LogUploadRing();

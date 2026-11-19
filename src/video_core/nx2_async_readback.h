@@ -36,6 +36,7 @@ enum class Read : u8 {
     Sync,     ///< EXP49 off: the GPU thread downloaded and waited for the host GPU
     Async,    ///< The GPU thread submitted the downloads, the reading thread waited for them
     InFlight, ///< An earlier read's downloads covered it: no flush, only the wait
+    Stale,    ///< EDEN_NX2_STALE_READS: a recurring read served the last landed copy, no wait
     Count,
 };
 
@@ -145,16 +146,19 @@ inline void MaybeReport() {
     constexpr auto sync = static_cast<size_t>(Read::Sync);
     constexpr auto async = static_cast<size_t>(Read::Async);
     constexpr auto in_flight = static_cast<size_t>(Read::InFlight);
+    constexpr auto stale = static_cast<size_t>(Read::Stale);
     LOG_INFO(HW_GPU,
              "Read-back (EXP49) per second: reads {:.0f} sync ({:.1f} ms), {:.0f} async ({:.1f} "
-             "ms), {:.0f} only waited for a download on its way ({:.1f} ms) | GPU thread in read "
+             "ms), {:.0f} only waited for a download on its way ({:.1f} ms), {:.0f} stale-OK served "
+             "without waiting ({:.1f} ms) | GPU thread in read "
              "flushes {:.1f} ms | readers waited for the host GPU {:.0f} times, {:.1f} ms "
              "(longest {:.2f} ms) | GPU-side writes waited for a read download {:.0f} times, "
              "{:.1f} ms | GPU thread landed read downloads before a write {:.0f} times, {:.0f} "
              "waited ({:.1f} ms)",
              per_second(reads[sync]), ms_per_second(read_ns[sync]), per_second(reads[async]),
              ms_per_second(read_ns[async]), per_second(reads[in_flight]),
-             ms_per_second(read_ns[in_flight]), ms_per_second(flush_ns), per_second(reader_waits),
+             ms_per_second(read_ns[in_flight]), per_second(reads[stale]),
+             ms_per_second(read_ns[stale]), ms_per_second(flush_ns), per_second(reader_waits),
              ms_per_second(reader_wait_ns), static_cast<double>(reader_max_wait_ns) / 1e6,
              per_second(gpu_side_waits), ms_per_second(gpu_side_wait_ns),
              per_second(clear_landings), per_second(clear_waits), ms_per_second(clear_wait_ns));

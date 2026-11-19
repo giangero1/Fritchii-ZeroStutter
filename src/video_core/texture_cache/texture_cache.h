@@ -1347,7 +1347,56 @@ void TextureCache<P>::BudgetControl() {
     // program that keeps using its memory defeats (the tester's VRAM hog).
     if constexpr (requires(u64 value) { runtime.MainHeapNumbers(value, value, value); }) {
         const auto now = std::chrono::steady_clock::now();
-        if (now - budget_control_time < std::chrono::seconds{1}) {
+        // FRITCHII_VRAM_LOAD_GUARD (live, default 1; ZeroStutter): an area load adds GBs within
+        // the one second between two passes below (OoT on an 8 GB RTX 3070 at 1440p -> 4K DLSS +
+        // frame generation: 5.4 -> 8.8 GB of a 7.2 GB budget, driver +1.7 GB, buffers +1.4 GB,
+        // images +0.5 GB, staging +0.5 GB). Past the budget Windows moves memory to system RAM
+        // and the card then ran at 3-12 fps for 10-25 s while it came back. So the usage is
+        // sampled every 100 ms; a rise of 384 MiB or more within the last second, within 1 GiB
+        // of the target, is a load surge: for 3 s this pass runs every 250 ms and aims 1 GiB
+        // lower, so the cap, the collector's deletes past critical, the fitted pool and the
+        // evictions before creates act before the usage reaches the budget, not after.
+        const bool guard_on = VideoCore::Nx2Debug::SwitchValue(
+                                  VideoCore::Nx2Debug::g_vram_load_guard,
+                                  "FRITCHII_VRAM_LOAD_GUARD", 1) != 0;
+        constexpr u64 GuardRise = 384_MiB;
+        constexpr u64 GuardReserve = 1_GiB;
+        bool surge_now = false;
+        if (guard_on && now - load_guard_sample_time >= std::chrono::milliseconds{100}) {
+            load_guard_sample_time = now;
+            u64 g_size{};
+            u64 g_usage{};
+            u64 g_budget{};
+            if (runtime.MainHeapNumbers(g_size, g_usage, g_budget) && g_budget != 0) {
+                u64 lowest = g_usage;
+                for (size_t i = 0; i < load_guard_count; ++i) {
+                    lowest = (std::min)(lowest, load_guard_samples[i]);
+                }
+                load_guard_samples[load_guard_next] = g_usage;
+                load_guard_next = (load_guard_next + 1) % load_guard_samples.size();
+                load_guard_count = (std::min)(load_guard_count + 1, load_guard_samples.size());
+                const u64 g_headroom = std::clamp(g_budget / 16, u64{256_MiB}, u64{1_GiB});
+                const u64 g_target = g_budget - (std::min)(g_budget, g_headroom);
+                const u64 danger = g_target - (std::min)(g_target, GuardReserve);
+                if (g_usage - lowest >= GuardRise && g_usage >= danger) {
+                    if (now >= load_guard_until) {
+                        ++load_guard_surges;
+                        LOG_INFO(HW_GPU,
+                                 "VRAM load guard (FRITCHII_VRAM_LOAD_GUARD): usage rose {} MiB "
+                                 "within a second to {} MiB of budget {} MiB; aiming {} MiB lower "
+                                 "for 3 s (surge {})",
+                                 (g_usage - lowest) >> 20, g_usage >> 20, g_budget >> 20,
+                                 GuardReserve >> 20, load_guard_surges);
+                        surge_now = true;
+                    }
+                    load_guard_until = now + std::chrono::seconds{3};
+                }
+            }
+        }
+        const bool surge = guard_on && now < load_guard_until;
+        const auto interval = surge ? std::chrono::milliseconds{250}
+                                    : std::chrono::milliseconds{1000};
+        if (!surge_now && now - budget_control_time < interval) {
             return;
         }
         budget_control_time = now;
@@ -1378,7 +1427,9 @@ void TextureCache<P>::BudgetControl() {
         const u64 headroom = headroom_mib > 0
                                  ? u64{static_cast<u32>(headroom_mib)} << 20
                                  : std::clamp(budget / 16, u64{256_MiB}, u64{1_GiB});
-        const u64 target = budget - (std::min)(budget, headroom);
+        // FRITCHII_VRAM_LOAD_GUARD: during a surge the target sits a reserve lower.
+        const u64 surge_reserve = surge ? GuardReserve : 0;
+        const u64 target = budget - (std::min)(budget, headroom + surge_reserve);
         seen.budget = budget;
         seen.headroom = headroom;
         seen.peak_usage = (std::max)(seen.peak_usage, usage);

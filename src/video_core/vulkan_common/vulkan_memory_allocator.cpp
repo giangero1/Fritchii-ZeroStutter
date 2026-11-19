@@ -50,6 +50,23 @@
 #include "video_core/small_card.h"
 
 namespace Vulkan {
+
+// FRITCHII_VRAM_PRIORITY (VK_EXT_memory_priority; ignored unless the allocator was made with it):
+// what the driver keeps in VRAM when the process is over its budget. 0.5 is the default.
+static constexpr float PriorityRenderTarget = 1.0f;
+static constexpr float PriorityDefault = 0.5f;
+static constexpr float PriorityHost = 0.2f;
+
+static float ImagePriority(const VkImageCreateInfo& ci) {
+    constexpr VkImageUsageFlags attachment = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                                             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                                             VK_IMAGE_USAGE_STORAGE_BIT;
+    return (ci.usage & attachment) != 0 ? PriorityRenderTarget : PriorityDefault;
+}
+
+static float BufferPriority(MemoryUsage usage) {
+    return usage == MemoryUsage::DeviceLocal ? PriorityDefault : PriorityHost;
+}
 namespace {
 
 // Helpers translating MemoryUsage to flags/usage
@@ -429,7 +446,7 @@ static VmaPool DepthPoolOfType(VmaAllocator allocator, u32 type, bool is_small) 
         .blockSize = is_small ? SmallDepthBlockBytes() : 64_MiB,
         .minBlockCount = is_small ? 0U : min_blocks,
         .maxBlockCount = 0,
-        .priority = 0.f,
+        .priority = PriorityRenderTarget,
         .minAllocationAlignment = 0,
         .pMemoryAllocateNext = nullptr,
     };
@@ -510,7 +527,7 @@ VmaPool ColourAttachmentPool(VmaAllocator allocator, const VkImageCreateInfo& ci
         .blockSize = KillPoolBlockBytes,
         .minBlockCount = min_blocks,
         .maxBlockCount = 0,
-        .priority = 0.f,
+        .priority = PriorityRenderTarget,
         .minAllocationAlignment = 0,
         .pMemoryAllocateNext = nullptr,
     };
@@ -1038,7 +1055,7 @@ VkResult MemoryAllocator::AllocateImage(const VkImageCreateInfo &ci, bool dedica
             .pool = VK_NULL_HANDLE,
             // Tag and stamp (vk::ImageUserDataTag): FRITCHII_VRAM_HOLES reads the age.
             .pUserData = ImageUserData(0),
-            .priority = 0.f,
+            .priority = ImagePriority(ci),
     };
 
     VkImage handle{};
@@ -1294,7 +1311,7 @@ VmaAllocation MemoryAllocator::AllocateSparseMemory(const VkMemoryRequirements &
         .memoryTypeBits = requirements.memoryTypeBits,
         .pool = VK_NULL_HANDLE,
         .pUserData = nullptr,
-        .priority = 0.f,
+        .priority = PriorityDefault,
     };
     VmaAllocation allocation{};
     VmaAllocationInfo info{};
@@ -1381,7 +1398,7 @@ vk::Buffer MemoryAllocator::CreateBuffer(const VkBufferCreateInfo &ci, MemoryUsa
         .memoryTypeBits = usage == MemoryUsage::Stream ? 0u : valid_memory_types,
         .pool = VK_NULL_HANDLE,
         .pUserData = nullptr,
-        .priority = 0.f,
+        .priority = BufferPriority(usage),
     };
 
     VkBuffer handle{};
@@ -1484,7 +1501,7 @@ vk::Buffer MemoryAllocator::CreateAlignedBuffer(const VkBufferCreateInfo &ci, Me
         .memoryTypeBits = memory_type_bits,
         .pool = VK_NULL_HANDLE,
         .pUserData = nullptr,
-        .priority = 0.f,
+        .priority = BufferPriority(usage),
     };
 
     VkBuffer handle{};
@@ -1558,7 +1575,7 @@ MemoryCommit MemoryAllocator::Commit(const vk::Buffer &buffer, MemoryUsage usage
     ci.preferredFlags = MemoryUsagePreferredVmaFlags(usage);
     ci.pool = VK_NULL_HANDLE;
     ci.pUserData = nullptr;
-    ci.priority = 0.0f;
+    ci.priority = BufferPriority(usage);
 
     const VkBuffer raw = *buffer;
 

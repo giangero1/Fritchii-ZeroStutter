@@ -245,6 +245,9 @@ private:
     StagingBuffersCache download_cache;
 
     size_t current_delete_level = 0;
+    /// FRITCHII_STAGING_PRESSURE_PURGE: when the heap was last checked and how many purges ran.
+    std::chrono::steady_clock::time_point pressure_check_time{};
+    u64 pressure_purges{};
     u64 buffer_index = 0;
     u64 unique_ids{};
 

@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
+#include <mutex>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -491,6 +493,15 @@ struct GPU::Impl {
         // earlier read's downloads cover (in_flight) only waits; with the switch off it flushes
         // as before, which lands or downloads those bytes again.
         const bool async = VideoCore::Nx2Debug::Experiment(49) != 0;
+        // EDEN_NX2_STALE_READS (default 1): a read OoT repeats every frame takes the copy that
+        // already landed (a frame old at most) instead of waiting for the GPU thread, which with
+        // the one follower can be a whole batch of draws away. A fresh download is queued without
+        // waiting and lands at the next fence or frame tick, so the next read sees newer bytes.
+        if (async && TryServeStaleRead(raster_area, area_size, request)) {
+            AsyncReadback::CountRead(AsyncReadback::Read::Stale, AsyncReadback::Now() - request);
+            AsyncReadback::MaybeReport();
+            return raster_area;
+        }
         if (!async || !raster_area.in_flight) {
             const u64 fence = RequestSyncOperation([this, raster_area, area_size, async]() {
                 // Its own zone: it runs in whatever zone TickWork runs in (a draw's, mostly).
@@ -535,6 +546,106 @@ struct GPU::Impl {
         }
         return raster_area;
     }
+
+    /// EDEN_NX2_STALE_READS: whether stale-OK recurring reads are on (environment, read once).
+    /// Only for Switch 2 programs with the one follower running, the case whose read flushes
+    /// queue behind a batch of split draw work.
+    [[nodiscard]] static bool StaleReadsOn() {
+        static const bool on = [] {
+            const char* value = std::getenv("EDEN_NX2_STALE_READS");
+            const bool enabled = value == nullptr || value[0] != '0';
+            LOG_INFO(HW_GPU, "Stale-OK recurring reads (EDEN_NX2_STALE_READS): {}",
+                     enabled ? "on" : "off");
+            return enabled;
+        }();
+        return on && VideoCommon::OneFollower::On() && Settings::CurrentProgramIsSwitch2();
+    }
+
+    /// EDEN_NX2_STALE_READS: OoT's reads of GPU-written memory land on many different 4 KiB pages
+    /// (a few hundred per minute), under one a frame, so recurrence is judged per 1 MiB zone: a
+    /// zone read in StaleRecurringFrames frames in a row (reads at least StaleMinGapNs apart, at
+    /// most StaleMaxGapNs) has its reads served from guest memory as it is, the bytes of the last
+    /// landed download there. A zone's first reads always wait. Each served read queues, without
+    /// waiting, a download of the 64 KiB around it (neighbour pages are read next), one queued per
+    /// zone at a time; it lands without a waiter (BufferCache's frame tick and fence release write
+    /// completed read downloads).
+    bool TryServeStaleRead(const VideoCore::RasterizerDownloadArea& area, u64 area_size,
+                           u64 now) {
+        if (!StaleReadsOn()) {
+            return false;
+        }
+        static constexpr u64 StaleMinGapNs = 4'000'000;    // 4 ms: a later frame, not the same one
+        static constexpr u64 StaleMaxGapNs = 250'000'000;  // 250 ms: the zone is still busy
+        static constexpr u32 StaleRecurringFrames = 3;
+        static constexpr u64 StaleZoneBits = 20;        // 1 MiB zones decide recurrence
+        static constexpr u64 StalePrefetchBytes = 0x10000; // 64 KiB downloaded around a read
+        const u64 zone = area.start_address >> StaleZoneBits;
+        size_t index{};
+        bool queue{};
+        {
+            std::scoped_lock lock{stale_reads_mutex};
+            const auto it = std::ranges::find_if(stale_reads, [&](const StaleReadArea& entry) {
+                return entry.zone == zone && entry.streak != 0;
+            });
+            if (it == stale_reads.end()) {
+                stale_reads[stale_reads_next] =
+                    StaleReadArea{.zone = zone, .last_ns = now, .streak = 1, .fence = 0};
+                stale_reads_next = (stale_reads_next + 1) % stale_reads.size();
+                return false;
+            }
+            StaleReadArea& entry = *it;
+            const u64 gap = now - entry.last_ns;
+            if (gap > StaleMaxGapNs) {
+                entry.last_ns = now;
+                entry.streak = 1;
+                return false;
+            }
+            if (gap >= StaleMinGapNs) {
+                entry.last_ns = now;
+                entry.streak = std::min<u32>(entry.streak + 1, StaleRecurringFrames);
+            }
+            if (entry.streak < StaleRecurringFrames) {
+                return false;
+            }
+            index = static_cast<size_t>(it - stale_reads.begin());
+            // An earlier read's download still on its way, or our queued flush not run yet:
+            // nothing new to ask for.
+            queue = !area.in_flight && CurrentSyncRequestFence() >= entry.fence;
+        }
+        if (queue) {
+            const DAddr prefetch_start = area.start_address & ~(StalePrefetchBytes - 1);
+            const DAddr prefetch_end = std::max<DAddr>(
+                (area.end_address + StalePrefetchBytes - 1) & ~(StalePrefetchBytes - 1),
+                area.start_address + area_size);
+            const u64 fence = RequestSyncOperation([this, prefetch_start, prefetch_end]() {
+                const VideoCommon::Nx2Profile::Scope read_scope{
+                    VideoCommon::Nx2Profile::Zone::ReadFlush};
+                const u64 start = VideoCore::AsyncReadback::Now();
+                InvalidateGPUCache();
+                renderer->ReadRasterizer()->FlushRegionForRead(prefetch_start,
+                                                               prefetch_end - prefetch_start);
+                VideoCore::AsyncReadback::Add(VideoCore::AsyncReadback::g_counters.flush_ns,
+                                              VideoCore::AsyncReadback::Now() - start);
+            });
+            gpu_thread.TickGPU(is_async);
+            std::scoped_lock lock{stale_reads_mutex};
+            StaleReadArea& entry = stale_reads[index];
+            if (entry.zone == zone) {
+                entry.fence = fence;
+            }
+        }
+        return true;
+    }
+
+    struct StaleReadArea {
+        u64 zone{};
+        u64 last_ns{};
+        u32 streak{};
+        u64 fence{};
+    };
+    std::mutex stale_reads_mutex;
+    std::array<StaleReadArea, 64> stale_reads{};
+    size_t stale_reads_next{};
 
     /// FRITCHII_READ_RUNS: the read's writer, as GetFlushArea found it, and whether the read's
     /// bytes in guest memory differ now that its download landed from before it landed.

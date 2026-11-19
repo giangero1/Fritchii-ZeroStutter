@@ -179,6 +179,14 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
     u64 budget_cap{~0ULL};
     bool budget_pressure{}; ///< budget_cap binds: the driver's usage passed the budget less headroom
     std::chrono::steady_clock::time_point budget_control_time{};
+    /// FRITCHII_VRAM_LOAD_GUARD: the driver's main heap usage sampled every 100 ms (the last
+    /// second), when the last sample was taken, and until when a load surge holds the reserve.
+    std::array<u64, 10> load_guard_samples{};
+    size_t load_guard_next{};
+    size_t load_guard_count{};
+    std::chrono::steady_clock::time_point load_guard_sample_time{};
+    std::chrono::steady_clock::time_point load_guard_until{};
+    u64 load_guard_surges{};
     /// FRITCHII_SCALE_DEPTH_MAX: depth images kept native (each counted once).
     struct DepthNativeStats {
         u32 window{}; ///< since the last 10 s line
