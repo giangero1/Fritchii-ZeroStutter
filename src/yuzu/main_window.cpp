@@ -5696,8 +5696,10 @@ void MainWindow::OnApplicationChanged(u64 program_id) {
 void MainWindow::UpdateWindowTitle(std::string_view title_name, std::string_view title_version,
                                    std::string_view gpu_vendor) {
     static const std::string build_id = std::string{Common::g_build_id};
+    // ZeroStutter: the unofficial fork's own version next to the Fritchii version it is based on,
+    // so a screenshot or a bug report shows which build it is.
     static const std::string yuzu_title =
-        fmt::format("{} | {} | {}", std::string{Common::g_build_name},
+        fmt::format("{} | {} | Zero-Stutter fork v6.2.2 | {}", std::string{Common::g_build_name},
                     Common::BuildLabelWithTag(), std::string{Common::g_compiler_id});
 
     const auto override_title =

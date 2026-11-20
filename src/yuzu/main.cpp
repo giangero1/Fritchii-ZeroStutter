@@ -530,6 +530,17 @@ int main(int argc, char* argv[]) {
             qputenv("__GL_SHADER_DISK_CACHE_SIZE", "10737418240"); // 10 GiB
         }
     }
+    // ZeroStutter v6.2.2: OBS's and Medal's Vulkan game-capture layers off, as the fork's
+    // launcher does, also when fritchii.exe is started directly. A tester's GPU hung in a present
+    // pass during the boot's shader load with OBS's capture hook in the process, and the Stop that
+    // followed lost the device. Only these two layers: turning every implicit layer off (the
+    // launcher's VK_LOADER_LAYERS_DISABLE) can change the GPU order on PCs with an integrated GPU.
+    // A value already set (=0 by the player) wins; OBS's window or display capture still works.
+    for (const char* name : {"DISABLE_VULKAN_OBS_CAPTURE", "DISABLE_VULKAN_MEDAL_OBS_CAPTURE"}) {
+        if (!qEnvironmentVariableIsSet(name)) {
+            qputenv(name, "1");
+        }
+    }
     bool has_broken_vulkan = false;
     bool is_child = false;
     if (CheckEnvVars(&is_child)) {
