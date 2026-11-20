@@ -2924,7 +2924,13 @@ bool TextureCacheRuntime::DefragEnabled() const noexcept {
     return enabled && !device.IsAllocatorThreadSafe();
 }
 
-bool TextureCacheRuntime::DefragBegin(u64 min_slack, std::vector<u64>& sources) {
+u64 TextureCacheRuntime::DropImagePool() {
+    const u64 bytes = image_pool_bytes;
+    TrimImagePool(0);
+    return bytes - (std::min)(bytes, image_pool_bytes);
+}
+
+bool TextureCacheRuntime::DefragBegin(u64 min_slack, std::vector<u64>& sources, bool big) {
     sources.clear();
     if (defrag_context != nullptr) {
         return false;
@@ -2952,8 +2958,9 @@ bool TextureCacheRuntime::DefragBegin(u64 min_slack, std::vector<u64>& sources) 
     VmaDefragmentationInfo info{};
     info.flags = VMA_DEFRAGMENTATION_FLAG_ALGORITHM_BALANCED_BIT;
     info.pool = nullptr; // the default pools, where the texture cache's images are
-    info.maxBytesPerPass = u64{64} << 20;
-    info.maxAllocationsPerPass = 64;
+    // FRITCHII_AREA_CLEAN: right after an area load, bigger passes (256 MiB, 256 images).
+    info.maxBytesPerPass = big ? u64{256} << 20 : u64{64} << 20;
+    info.maxAllocationsPerPass = big ? 256 : 64;
     if (vmaBeginDefragmentation(allocator, &info, &defrag_context) != VK_SUCCESS) {
         defrag_context = nullptr;
         return false;
@@ -3658,6 +3665,9 @@ void TextureCacheRuntime::TickVramTrim() {
         percent = VideoCore::SmallCard::Active() ? 90 : 0;
     } else if (value >= 2) {
         percent = (std::min)(static_cast<u64>(value), u64{100});
+    }
+    if (vram_trim_force && value != 0) {
+        percent = 1; // FRITCHII_AREA_CLEAN: right after an area load, at any usage
     }
     if (percent == 0) {
         return;
@@ -6566,12 +6576,16 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
         // every area load held back for nothing: each deferral waits for a frame, and a load
         // has a frame every ~2 s, so loads took ~28 s instead of 4-7 s. Without
         // VK_EXT_memory_budget the cap applies as before.
+        // Cards with the small card profile on (main heap under 9 GiB, e.g. 8 GB) always
+        // cap, as in v6.2.1: on an RTX 3070 at 4K, letting ~850 MiB decode bursts through
+        // until 7/8 of the budget filled the card on a market re-entry (6.6 of 7.0 GB) and
+        // the frame rate fell to 5 fps. The decode images already in flight count too.
         bool vram_tight = true;
-        if (in_flight >= scratch_cap) {
+        if (in_flight >= scratch_cap && !VideoCore::SmallCard::Active()) {
             u64 usage{};
             u64 budget{};
             if (device.MainHeapUsage(usage, budget) && budget != 0) {
-                vram_tight = usage >= budget - budget / 8;
+                vram_tight = usage + in_flight >= budget - budget / 8;
             }
             if (!vram_tight) {
                 static u64 let_through{};

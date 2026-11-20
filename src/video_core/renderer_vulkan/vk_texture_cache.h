@@ -221,7 +221,15 @@ public:
     /// Starts a VMA defragmentation pass when the main allocator's device local blocks hold at
     /// least `min_slack` unused bytes. `sources` gets each listed move's allocation (as a key,
     /// see Image::DefragKey), by move index. False: no pass.
-    bool DefragBegin(u64 min_slack, std::vector<u64>& sources);
+    bool DefragBegin(u64 min_slack, std::vector<u64>& sources, bool big = false);
+
+    /// FRITCHII_AREA_CLEAN: empties the image pool (an area load just started). Returns the bytes.
+    u64 DropImagePool();
+
+    /// FRITCHII_AREA_CLEAN: while on, the empty blocks go back at any usage, every 250 ms.
+    void ForceVramTrim(bool on) noexcept {
+        vram_trim_force = on;
+    }
     /// Moves `image` (the pass's move `index`): a new image at the place VMA reserved, the old
     /// one's contents copied there on the GPU. False: the move is cancelled.
     bool DefragMoveImage(size_t index, Image& image);
@@ -627,6 +635,7 @@ public:
     u64 vram_trim_bytes{};   ///< what they gave back, this session
     std::chrono::steady_clock::time_point vram_trim_logged{};
     std::chrono::steady_clock::time_point vram_trim_checked{}; ///< last trim check
+    bool vram_trim_force{}; ///< FRITCHII_AREA_CLEAN: trim at any usage
     static constexpr u64 ImagePoolMaxFrames = 180;
     std::deque<PooledImage> image_pool;
     u64 image_pool_bytes{};

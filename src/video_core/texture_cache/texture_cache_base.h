@@ -41,6 +41,7 @@
 #include "core/gpu_dirty_memory_manager.h"
 #include "video_core/compatible_formats.h"
 #include "video_core/nx2_debug_control.h"
+#include "video_core/small_card.h"
 #include "video_core/control/channel_state_cache.h"
 #include "video_core/delayed_destruction_ring.h"
 #include "video_core/engines/fermi_2d.h"
@@ -187,6 +188,20 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
     std::chrono::steady_clock::time_point load_guard_sample_time{};
     std::chrono::steady_clock::time_point load_guard_until{};
     u64 load_guard_surges{};
+    /// FRITCHII_AREA_CLEAN (boot; 0 off, 1 = with the small card profile (default), 2 = any
+    /// card): for 8 s after an area load starts, the previous area's leftovers go.
+    [[nodiscard]] static bool AreaCleanOn() {
+        static const int value = [] {
+            const char* text = std::getenv("FRITCHII_AREA_CLEAN");
+            return text != nullptr ? std::atoi(text) : 1;
+        }();
+        return value >= 2 || (value == 1 && VideoCore::SmallCard::Active());
+    }
+    std::chrono::steady_clock::time_point area_clean_until{};
+    u64 area_clean_count{};
+    u64 area_clean_start_usage{};
+    u64 area_clean_pool_bytes{};
+    bool area_clean_active{};
     /// FRITCHII_SCALE_DEPTH_MAX: depth images kept native (each counted once).
     struct DepthNativeStats {
         u32 window{}; ///< since the last 10 s line

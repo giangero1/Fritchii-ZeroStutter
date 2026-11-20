@@ -1393,6 +1393,50 @@ void TextureCache<P>::BudgetControl() {
                 }
             }
         }
+        // FRITCHII_AREA_CLEAN (ZeroStutter v6.2.2). On an 8 GB RTX 3070 at 1440p -> 4K DLSS,
+        // OoT's Castle Town market ran fine on the first visit (~5.7 GB of ours) but after
+        // going outside and back the usage sat at 6.2-6.7 GB: 0.5-1.3 GB of holes in the
+        // allocator blocks, up to 0.4 GB of pooled images, and the drain's surge pass keeping
+        // images idle under 120 frames. With other apps' ~1.2 GB the card filled, the driver
+        // moved memory to system RAM and the market ran at 6-20 fps without recovering. So for
+        // 8 s after a load surge: the image pool is emptied, the drain deletes every clean
+        // image idle 30+ frames (up to 2 GiB), defrag runs every frame with bigger passes at
+        // any usage, and the empty blocks go back at any usage, so each area starts as clean
+        // as the first one.
+        if (area_clean_active && now >= area_clean_until) {
+            area_clean_active = false;
+            if constexpr (requires { runtime.ForceVramTrim(false); }) {
+                runtime.ForceVramTrim(false);
+            }
+            u64 e_size{};
+            u64 e_usage{};
+            u64 e_budget{};
+            runtime.MainHeapNumbers(e_size, e_usage, e_budget);
+            LOG_INFO(HW_GPU,
+                     "Area clean (FRITCHII_AREA_CLEAN) {} done: main heap {} MiB at the load's "
+                     "start, {} MiB now (budget {} MiB); image pool emptied {} MiB",
+                     area_clean_count, area_clean_start_usage >> 20, e_usage >> 20,
+                     e_budget >> 20, area_clean_pool_bytes >> 20);
+        }
+        if (surge_now && AreaCleanOn()) {
+            const bool was_active = area_clean_active;
+            area_clean_until = now + std::chrono::seconds{8};
+            area_clean_active = true;
+            u64 pool_bytes = 0;
+            if constexpr (requires { runtime.DropImagePool(); }) {
+                pool_bytes = runtime.DropImagePool();
+                runtime.ForceVramTrim(true);
+            }
+            if (!was_active) {
+                ++area_clean_count;
+                u64 c_size{};
+                u64 c_budget{};
+                area_clean_start_usage = 0;
+                runtime.MainHeapNumbers(c_size, area_clean_start_usage, c_budget);
+                area_clean_pool_bytes = 0;
+            }
+            area_clean_pool_bytes += pool_bytes;
+        }
         const bool surge = guard_on && now < load_guard_until;
         const auto interval = surge ? std::chrono::milliseconds{250}
                                     : std::chrono::milliseconds{1000};
@@ -1400,7 +1444,16 @@ void TextureCache<P>::BudgetControl() {
             return;
         }
         budget_control_time = now;
-        const int mode = VideoCore::Nx2Debug::VramBudgetMode();
+        int mode = VideoCore::Nx2Debug::VramBudgetMode();
+        // ZeroStutter v6.2.2: with the small card profile on and FRITCHII_VRAM_BUDGET_MODE not
+        // set, the budget counts other processes' video memory (mode 2, "os"). On an 8 GB RTX
+        // 3070 at 1440p -> 4K DLSS, a browser, Discord and the desktop held ~0.8-1.3 GB that the
+        // driver's own budget (7.0-7.2 GB) left in, so the cache aimed at room the card did not
+        // have and the driver moved memory to system RAM.
+        static const bool mode_set = std::getenv("FRITCHII_VRAM_BUDGET_MODE") != nullptr;
+        if (!mode_set && mode == 1 && VideoCore::SmallCard::Active()) {
+            mode = 2;
+        }
         u64 size{};
         u64 usage{};
         u64 vk_budget{};
@@ -1429,7 +1482,7 @@ void TextureCache<P>::BudgetControl() {
         // the field's +2.3 GB load over the budget for 10-20 s).
         const u64 headroom = headroom_mib > 0 ? u64{static_cast<u32>(headroom_mib)} << 20
                              : VideoCore::SmallCard::Active()
-                                 ? u64{1_GiB}
+                                 ? u64{1536} << 20 // ZeroStutter v6.2.2: was 1 GiB
                                  : std::clamp(budget / 16, u64{256_MiB}, u64{1_GiB});
         // FRITCHII_VRAM_LOAD_GUARD: during a surge the target sits a reserve lower.
         const u64 surge_reserve = surge ? GuardReserve : 0;
@@ -1454,8 +1507,15 @@ void TextureCache<P>::BudgetControl() {
         } else if (usage > target) {
             const u64 over = usage - target;
             const u64 from = (std::min)(budget_cap, total_used_memory);
+            // ZeroStutter v6.2.2: with the small card profile on, the cap may go down to a
+            // quarter of the budget. On an 8 GB RTX 3070 at 1440p -> 4K DLSS, OoT's market keeps
+            // ~3 GB of images while buffers and the driver hold ~3 more: half the budget
+            // (~3.5 GB) sat above the cache, so the cap never bound, the collector never went
+            // aggressive, and circling the market took the usage to 6.9 of 7.1 GB until the
+            // driver moved memory to system RAM (5-8 fps).
+            const u64 cap_floor = VideoCore::SmallCard::Active() ? budget / 4 : budget / 2;
             budget_cap = (std::max)(from - (std::min)(from, (std::min)(over, u64{1_GiB})),
-                                    budget / 2);
+                                    cap_floor);
         } else if (budget_cap != ~0ULL) {
             // A dead band of half the headroom, so the cap does not chase the usage up and down.
             const u64 room = target - usage;
@@ -1628,7 +1688,16 @@ void TextureCache<P>::DrainSparseBlocks() {
         const bool surge = now < load_guard_until && drain_surge_seen != load_guard_surges;
         if (surge) {
             drain_surge_seen = load_guard_surges;
-            const u64 idle = (std::max)(u64{30}, (std::min)(thrash_floor, u64{120}));
+            const bool area_clean = area_clean_active;
+            // ZeroStutter v6.2.2: 15 frames with the small card profile on. Talking to an NPC
+            // in OoT's market (8 GB RTX 3070, 4K DLSS) switches to a close-up: usage rose
+            // 0.5 GB within a second, but the street's images had not been idle for 30 frames
+            // yet (at ~9 fps that is 3+ s), so this pass found 35 MiB and the game ran at ~9 fps
+            // for 18 s. Images in use are drawn every frame, so 15 idle frames is still past them.
+            const u64 clean_idle = VideoCore::SmallCard::Active() ? u64{15} : u64{30};
+            const u64 idle = area_clean
+                                 ? clean_idle
+                                 : (std::max)(u64{30}, (std::min)(thrash_floor, u64{120}));
             std::array<ImageId, NUM_RT + 1> surge_bound{};
             const auto surge_bound_image = [this](ImageViewId view_id) {
                 return view_id != NULL_IMAGE_VIEW_ID && view_id != ImageViewId{}
@@ -1641,8 +1710,8 @@ void TextureCache<P>::DrainSparseBlocks() {
             surge_bound[NUM_RT] = surge_bound_image(render_targets.depth_buffer_id);
             std::vector<ImageId> victims;
             u64 victim_bytes{};
-            constexpr u64 SurgeMaxBytes = u64{1} << 30;
-            constexpr size_t SurgeMaxImages = 2048;
+            const u64 SurgeMaxBytes = area_clean ? u64{2} << 30 : u64{1} << 30;
+            const size_t SurgeMaxImages = area_clean ? 8192 : 2048;
             if (frame_tick > idle) {
                 lru_cache.ForEachItemBelow(frame_tick - idle, [&](ImageId image_id) {
                     const Image& image = slot_images[image_id];
@@ -1841,7 +1910,8 @@ void TextureCache<P>::DefragImages() {
             }
             return;
         }
-        if (now - defrag_time < std::chrono::milliseconds{1000}) {
+        const bool cleaning = area_clean_active;
+        if (!cleaning && now - defrag_time < std::chrono::milliseconds{1000}) {
             return;
         }
         defrag_time = now;
@@ -1849,11 +1919,11 @@ void TextureCache<P>::DefragImages() {
         u64 usage{};
         u64 budget{};
         if (!runtime.MainHeapNumbers(heap_size, usage, budget) || budget == 0 ||
-            usage * 100 < budget * 85) {
+            (!cleaning && usage * 100 < budget * 85)) {
             return;
         }
         std::vector<u64> sources;
-        if (!runtime.DefragBegin(u64{256} << 20, sources)) {
+        if (!runtime.DefragBegin(cleaning ? u64{64} << 20 : u64{256} << 20, sources, cleaning)) {
             return;
         }
         std::array<ImageId, NUM_RT + 1> bound{};
@@ -2025,6 +2095,19 @@ void TextureCache<P>::TickThrashGuard() {
                     floor /= 2;
                     ++thrash_stats.capped;
                 }
+            }
+            // ZeroStutter v6.2.2: with the small card profile on, the driver's usage past the
+            // budget control's target caps the floor at 60 frames (~1-2 s). On an 8 GB RTX 3070
+            // at 1440p -> 4K DLSS, circling OoT's market kept the floor at 600 frames: nearly
+            // every image was used within it, so the collector could delete almost nothing and
+            // the usage climbed to 6.9 of 7.1 GB (the images alone, ~3 GB, never reached 3/4 of
+            // the budget; buffers and the driver held the rest) until the driver moved memory
+            // to system RAM (5-8 fps).
+            const BudgetSeen& seen = budget_seen;
+            if (VideoCore::SmallCard::Active() && seen.budget != 0 &&
+                seen.usage + seen.headroom > seen.budget && floor > 60) {
+                floor = 60;
+                ++thrash_stats.capped;
             }
         }
         thrash_floor = floor;
