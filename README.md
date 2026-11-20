@@ -11,7 +11,7 @@ The **v6.2 Zero-Stutter update** moves the engine onto **upstream Fritchii v6.2*
 2. The **white light / overexposure flash** when turning the camera.
 3. **10–20 seconds of very low FPS after entering a new area** on 8 GB cards. It now recovers in **1–2 s** on most loads, even with a browser and a Twitch stream open next to the game.
 
-> ⚠️ **Test release.** It was measured on one PC (RTX 3070 8 GB + 5800X3D). If anything looks or runs worse for you, every fix below has its own off-switch. Please send your `user\log\eden_log.txt`.
+> ⚠️ **Test release.** It was measured on one PC (RTX 3070 8 GB + 5800X3D). If anything looks or runs worse for you, every fix below has its own off-switch. **Provided as is, with no support.**
 
 ---
 
@@ -34,7 +34,7 @@ The cause: textures share 32 MB memory blocks, and a block only goes back to Win
 | VRAM free | 0 GB, over the limit | **~1.1 GB** |
 | FPS in the market (screenshot above) | dropping, then crash | **84 on screen (41 game + 42 generated)**, GPU 21.5 ms |
 
-*Honest note:* in one longer session (time travel back and forth before the market) the same scene still ran at ~19 game FPS without crashing, so results can vary with how much VRAM has built up. If the market is slow for you, please send your log.
+*Honest note:* in one longer session (time travel back and forth before the market) the same scene still ran at ~19 game FPS without crashing, so results can vary with how much VRAM has built up.
 
 **Also new:** `FRITCHII_GPU_ZONES` writes a line to the log every 10 s with how much GPU time DLSS, frame generation and texture decoding take. In the market DLSS takes ~4 ms a frame and frame generation under 1 ms. Set it to `0` to turn it off.
 
@@ -178,7 +178,7 @@ If your CPU has fewer than 8 cores, open `Play-Fritchii-6.2.1-ZeroStutter.cmd` (
 4. Run **`Play-Fritchii-6.2.1-ZeroStutter.cmd`**.
 5. Right-click **`FG`** on the status bar (or **Emulation → Configure → Graphics**) to pick **DLSS-G**, **Optical Flow** or **LSFG**.
 
-**Something wrong?** Add the matching off-switch from the table above to `nx2_switches.txt` (one per line, e.g. `EDEN_NX2_STALE_READS=0`), restart, and send your `user\log\eden_log.txt`.
+**Something wrong?** Add the matching off-switch from the table above to `nx2_switches.txt` (one per line, e.g. `EDEN_NX2_STALE_READS=0`), and restart.
 
 ---
 
