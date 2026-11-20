@@ -144,6 +144,17 @@ fritchii-v6.2.1-zerostutter-win64/
 ```
 *The first boot after a new driver or a new emulator build runs "Preparing shaders" once. This can take 10–20 minutes for a full pack. Later boots are fast.*
 
+### Want the full ~120k precompiled shaders? Get Frizti's recipe from the official Fritchii
+
+The shader pack above holds the ~19k-shader cache. The **~120k precompiled shaders** (116,351 graphics + 4,085 compute in the log) come from Frizti's **recipe file**, `recipes\OoT v131072 (cache v54).nx2recipe`. It comes only with the **official Fritchii download from Frizti**. Frizti's recipe license doesn't allow forks to include it, so **it is not in this fork's zip**, and without it you won't see the 120k.
+
+To get them:
+1. Download the official **Fritchii v6.2** from Frizti.
+2. Copy its whole `recipes` folder (the `.nx2recipe` file and `RECIPE-LICENSE.txt`) next to `fritchii.exe` in your fork folder.
+3. Start the game. The first boot runs "Preparing shaders" for your GPU (this can take 10–20 minutes). Later boots are fast, and the log shows "116351 graphics and 4085 compute pipelines".
+
+*Frizti's license says the recipe is for use inside Fritchii and needs his permission for other builds. Read `RECIPE-LICENSE.txt` and ask Frizti on Discord if you're unsure. Shader precompile recipe by Frizti (Fritchii).*
+
 ---
 
 ## ⚙️ CPU Core & Thread Tuning (For 6-Core & 4-Core Users)
@@ -163,6 +174,7 @@ If your CPU has fewer than 8 cores, open `Play-Fritchii-6.2.1-ZeroStutter.cmd` (
 1. Download **`fritchii-v6.2.1-zerostutter-win64.zip`** from [Releases](https://github.com/giangero1/Fritchii-ZeroStutter/releases/latest).
 2. Extract it into a clean folder (e.g. `D:\Games\Fritchii-6.2.1-ZeroStutter`). Coming from v6.2 or v6.0? You can copy your old `user` folder over (saves, config, shader cache), or just replace `fritchii.exe` and `lichii.exe` in your v6.2 folder.
 3. *(Recommended)* Put the two `fork-v54` shader files into `user\cache\shader\0400486024dec000\`.
+   For the full ~120k precompiled shaders, also copy the `recipes` folder from the official Fritchii (see [the recipe section](#want-the-full-120k-precompiled-shaders-get-friztis-recipe-from-the-official-fritchii)).
 4. Run **`Play-Fritchii-6.2.1-ZeroStutter.cmd`**.
 5. Right-click **`FG`** on the status bar (or **Emulation → Configure → Graphics**) to pick **DLSS-G**, **Optical Flow** or **LSFG**.
 
