@@ -25,6 +25,7 @@
 #include "video_core/vulkan_common/streamline.h"
 #include "video_core/vulkan_common/streamline_api.h"
 #include "video_core/vulkan_common/streamline_frame_gen.h"
+#include "video_core/renderer_vulkan/vk_gpu_zones.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 
@@ -598,6 +599,8 @@ bool StreamlineDlssUpscaler::Upscale(const Inputs& in) {
                                        in.motion_vectors.format);
     }
 
+    // FRITCHII_GPU_ZONES: the evaluate's GPU time.
+    const GpuZones::Scope gpu_zone{device, scheduler, GpuZones::Zone::Dlss};
     scheduler.RequestOutsideRenderPassOperationContext();
     scheduler.Record([this, in, options, options_changed, requested = settings.quality,
                       preset_setting = settings.preset, index, constants, set_constants,

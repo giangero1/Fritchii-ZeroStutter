@@ -16,6 +16,7 @@
 #include "video_core/renderer_vulkan/vk_present_manager.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/vulkan_common/vk_enum_string_helper.h"
+#include "video_core/renderer_vulkan/vk_gpu_zones.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #ifdef EGLANTINE_STREAMLINE
 #include "video_core/vulkan_common/streamline.h"
@@ -313,6 +314,7 @@ void FrameGen::Process(const Device& device, Frame* frame, VkFormat format,
     generated = warm && warm_streak >= LSFG_RECURRENCE_FRAMES && plan.generations > 0;
 
     if (built_type == Settings::FrameGenType::Fsr3 && fsr3_chain) {
+        const GpuZones::Scope gpu_zone{device, scheduler, GpuZones::Zone::FrameGenInput};
         scheduler.RequestOutsideRenderPassOperationContext();
         fsr3_chain->Process(device, scheduler, *frame->image, *frame->storage_view, count);
         SetState(VideoCore::FrameGenState::Running, format);
@@ -440,6 +442,7 @@ void FrameGen::GenerateInto(const Device& device, Frame* destination, size_t gen
         const f32 blend = static_cast<f32>(generation + 1) / static_cast<f32>(last_generations + 1);
         const f32 flow_scale = ConfiguredFlowScale(peak_guest_extent, built_extent);
 
+        const GpuZones::Scope gpu_zone{device, scheduler, GpuZones::Zone::FrameGenMake};
         scheduler.RequestOutsideRenderPassOperationContext();
         fsr3_chain->Generate(device, scheduler, *destination->storage_view, blend, flow_scale);
     } else if (built_type == Settings::FrameGenType::Lsfg && chain) {

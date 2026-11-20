@@ -10,6 +10,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <mutex>
+#include <unordered_set>
 #include <optional>
 #include <string>
 #include <utility>
@@ -757,9 +759,63 @@ void Image::Release() const noexcept {
                 }
             }
         }
+        if (allocation != nullptr &&
+            DefragGuard::Defer(allocator, allocation,
+                               [allocator = allocator, handle = handle, allocation = allocation] {
+                                   vmaDestroyImage(allocator, handle, allocation);
+                               })) [[unlikely]] {
+            return;
+        }
         vmaDestroyImage(allocator, handle, allocation);
     }
 }
+
+namespace DefragGuard {
+namespace {
+std::atomic<bool> g_open{false};
+std::mutex g_mutex;
+VmaAllocator g_allocator{};
+std::unordered_set<VmaAllocation> g_listed;
+std::vector<std::function<void()>> g_waiting;
+} // Anonymous namespace
+
+void Open(VmaAllocator allocator, std::span<const VmaAllocation> allocations) {
+    std::scoped_lock lock{g_mutex};
+    g_allocator = allocator;
+    g_listed.clear();
+    g_listed.insert(allocations.begin(), allocations.end());
+    g_open.store(true, std::memory_order_release);
+}
+
+bool Defer(VmaAllocator allocator, VmaAllocation allocation, std::function<void()> free_fn) {
+    if (!g_open.load(std::memory_order_acquire)) [[likely]] {
+        return false;
+    }
+    std::scoped_lock lock{g_mutex};
+    if (!g_open.load(std::memory_order_relaxed) || allocator != g_allocator ||
+        !g_listed.contains(allocation)) {
+        return false;
+    }
+    g_listed.erase(allocation);
+    g_waiting.push_back(std::move(free_fn));
+    return true;
+}
+
+size_t Close() {
+    std::vector<std::function<void()>> waiting;
+    {
+        std::scoped_lock lock{g_mutex};
+        g_open.store(false, std::memory_order_release);
+        g_listed.clear();
+        g_allocator = nullptr;
+        waiting.swap(g_waiting);
+    }
+    for (auto& free_fn : waiting) {
+        free_fn();
+    }
+    return waiting.size();
+}
+} // namespace DefragGuard
 
 Image::MemoryBlock Image::GetMemoryBlock() const noexcept {
     if (allocation == nullptr) {
@@ -801,6 +857,15 @@ Image::DestroyTiming Image::DestroyTimed() noexcept {
     };
     // Counted outside the timed steps (vmaGetHeapBudgets can ask the driver every 30 operations).
     const u64 blocks_before = allocation != nullptr ? VmaMemoryObjectCount(allocator) : 0;
+    if (allocation != nullptr &&
+        DefragGuard::Defer(allocator, allocation,
+                           [allocator = allocator, handle = handle, allocation = allocation] {
+                               vmaDestroyImage(allocator, handle, allocation);
+                           })) [[unlikely]] {
+        handle = VkImage{};
+        allocation = nullptr;
+        return timing;
+    }
     const u64 t0 = now();
     dld->vkDestroyImage(owner, handle, nullptr);
     const u64 t1 = now();
@@ -846,6 +911,13 @@ void Buffer::SetObjectNameEXT(const char* name) const {
 void Buffer::Release() const noexcept {
     if (handle) {
         const VideoCommon::MemoryStageLink::AllocatorOp allocator_op{allocator};
+        if (allocation != nullptr &&
+            DefragGuard::Defer(allocator, allocation,
+                               [allocator = allocator, handle = handle, allocation = allocation] {
+                                   vmaDestroyBuffer(allocator, handle, allocation);
+                               })) [[unlikely]] {
+            return;
+        }
         vmaDestroyBuffer(allocator, handle, allocation);
     }
 }

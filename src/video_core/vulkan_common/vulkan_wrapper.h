@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <exception>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -783,6 +784,18 @@ public:
     /// True when the image's memory is device local (not placed in host memory over budget).
     [[nodiscard]] bool IsDeviceLocal() const noexcept;
 
+    /// FRITCHII_VRAM_DEFRAG: the image's VMA allocation (null for unbacked images).
+    [[nodiscard]] VmaAllocation Allocation() const noexcept {
+        return allocation;
+    }
+
+    /// FRITCHII_VRAM_DEFRAG: puts `new_handle` (bound to the allocation's new place) in the old
+    /// handle's stead and returns the old one, which the caller destroys once the GPU is done
+    /// with it. The allocation stays: VMA moves it at vmaEndDefragmentationPass.
+    [[nodiscard]] VkImage ExchangeHandle(VkImage new_handle) noexcept {
+        return std::exchange(handle, new_handle);
+    }
+
     /// EDEN_NX2_IMAGE_ALLOC_TIMING: what destroying the image took, in vmaDestroyImage's two
     /// steps, and whether VMA gave device memory back (its count of memory objects fell: an
     /// emptied block, or the image's own dedicated memory).
@@ -804,6 +817,18 @@ private:
     VmaAllocation allocation = nullptr;
     const DeviceDispatch* dld = nullptr;
 };
+
+/// FRITCHII_VRAM_DEFRAG (ZeroStutter): VMA requires that the allocations a defragmentation pass
+/// lists are not freed until the pass ends. While one is open, frees of those allocations (an
+/// image or buffer deleted meanwhile, in any of the paths that free VMA memory) wait here and run
+/// at Close, after vmaEndDefragmentationPass.
+namespace DefragGuard {
+void Open(VmaAllocator allocator, std::span<const VmaAllocation> allocations);
+/// True when the free was taken and will run at Close; false: free now.
+bool Defer(VmaAllocator allocator, VmaAllocation allocation, std::function<void()> free_fn);
+/// Ends the guard and runs the waiting frees. Returns how many ran.
+size_t Close();
+} // namespace DefragGuard
 
 /// The device memory objects VMA holds (blocks and dedicated allocations, all heaps), for
 /// EDEN_NX2_IMAGE_ALLOC_TIMING's "new block" and "block freed" counts.

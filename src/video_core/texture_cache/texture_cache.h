@@ -1802,6 +1802,101 @@ void TextureCache<P>::DrainSparseBlocks() {
 }
 
 template <class P>
+void TextureCache<P>::DefragImages() {
+    // FRITCHII_VRAM_DEFRAG (boot, default 1; 0 off; ZeroStutter). The drain above frees a block
+    // only when every image in it can be deleted; blocks that keep one image in use stay. OoT's
+    // daytime Castle Town market (child, after the Temple of Time) on an 8 GB RTX 3070 at 1440p
+    // -> 4K DLSS + DLSS-G sat at or over the budget for two minutes with ~500 MiB of holes in
+    // the image blocks (1777 of them), deleting textures the scene loaded right back, until the
+    // driver crashed inside frame generation's present. So near the budget, VMA picks images to
+    // move out of sparse blocks into others' holes (64 MiB, 64 images a pass at most); idle
+    // ones not drawn into are copied to their new place on the GPU and their views made again,
+    // as a rescale does; the emptied blocks go back once the GPU is past the copies.
+    if constexpr (requires { runtime.DefragEnabled(); }) {
+        runtime.DefragTick();
+        if (!runtime.DefragEnabled()) {
+            return;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (runtime.DefragPassOpen()) {
+            typename std::remove_cvref_t<decltype(runtime)>::DefragStats stats{};
+            if (!runtime.DefragPoll(stats)) {
+                return;
+            }
+            ++defrag_passes;
+            defrag_images += stats.moved_images;
+            defrag_bytes += stats.moved_bytes;
+            defrag_freed_bytes += stats.freed_bytes;
+            defrag_freed_blocks += stats.freed_blocks;
+            if (defrag_passes <= 10 || now - defrag_logged >= std::chrono::seconds{10}) {
+                defrag_logged = now;
+                LOG_INFO(HW_GPU,
+                         "VRAM defrag (FRITCHII_VRAM_DEFRAG): moved {} images ({} MiB), {} left "
+                         "in place, {} blocks ({} MiB) given back, {} frees waited; session {} "
+                         "passes, {} images, {} MiB moved, {} blocks, {} MiB given back",
+                         stats.moved_images, stats.moved_bytes >> 20, stats.cancelled,
+                         stats.freed_blocks, stats.freed_bytes >> 20, stats.deferred_frees,
+                         defrag_passes, defrag_images, defrag_bytes >> 20, defrag_freed_blocks,
+                         defrag_freed_bytes >> 20);
+            }
+            return;
+        }
+        if (now - defrag_time < std::chrono::milliseconds{1000}) {
+            return;
+        }
+        defrag_time = now;
+        u64 heap_size{};
+        u64 usage{};
+        u64 budget{};
+        if (!runtime.MainHeapNumbers(heap_size, usage, budget) || budget == 0 ||
+            usage * 100 < budget * 85) {
+            return;
+        }
+        std::vector<u64> sources;
+        if (!runtime.DefragBegin(u64{256} << 20, sources)) {
+            return;
+        }
+        std::array<ImageId, NUM_RT + 1> bound{};
+        const auto bound_image = [this](ImageViewId view_id) {
+            return view_id != NULL_IMAGE_VIEW_ID && view_id != ImageViewId{}
+                       ? slot_image_views[view_id].image_id
+                       : ImageId{};
+        };
+        for (size_t index = 0; index < NUM_RT; ++index) {
+            bound[index] = bound_image(render_targets.color_buffer_ids[index]);
+        }
+        bound[NUM_RT] = bound_image(render_targets.depth_buffer_id);
+        std::unordered_map<u64, ImageId> by_allocation;
+        by_allocation.reserve(slot_images.size());
+        for (const auto [image_id, image] : slot_images) {
+            if (const u64 key = image->DefragKey(); key != 0) {
+                by_allocation.emplace(key, image_id);
+            }
+        }
+        // Idle for a few frames: nothing recorded for the image is waiting to run.
+        constexpr u64 IdleFrames = 3;
+        for (size_t index = 0; index < sources.size(); ++index) {
+            const auto it = by_allocation.find(sources[index]);
+            if (it == by_allocation.end()) {
+                continue; // not an image of this cache (the pool's, another user's): stays
+            }
+            const ImageId image_id = it->second;
+            Image& image = slot_images[image_id];
+            const bool idle = frame_tick > IdleFrames && image.last_use_tick + IdleFrames < frame_tick;
+            const bool busy =
+                True(image.flags & (ImageFlagBits::IsDecoding | ImageFlagBits::CollectPending));
+            if (!idle || busy || std::ranges::find(bound, image_id) != bound.end()) {
+                continue;
+            }
+            if (runtime.DefragMoveImage(index, image)) {
+                InvalidateScale(image);
+            }
+        }
+        runtime.DefragSubmit();
+    }
+}
+
+template <class P>
 void TextureCache<P>::NoteThrashDelete(const Image& image) {
     if (VideoCore::Nx2Debug::SwitchValue(VideoCore::Nx2Debug::g_tc_thrash_guard,
                                          "FRITCHII_TC_THRASH_GUARD", 1) <= 0) {
@@ -2265,6 +2360,7 @@ void TextureCache<P>::TickFrame() {
     // usage just read (the collector below already sees a moved cap).
     BudgetControl();
     DrainSparseBlocks();
+    DefragImages();
     LogVramOwners();
     // EDEN_NX2_MEM_TRACE=1 (ported): every 2 s, what the cache holds next to
     // what the process and the driver report (memory climbs).

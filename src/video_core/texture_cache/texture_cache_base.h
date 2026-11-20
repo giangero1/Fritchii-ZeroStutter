@@ -1523,6 +1523,16 @@ private:
     /// FRITCHII_VRAM_DRAIN (boot, default 1; ZeroStutter): empties sparse device memory blocks
     /// whose images can all be loaded again from guest memory, so the blocks go back.
     void DrainSparseBlocks();
+    /// FRITCHII_VRAM_DEFRAG (boot, default 1; ZeroStutter): moves idle images out of
+    /// half-empty device memory blocks so the blocks go back to the driver.
+    void DefragImages();
+    std::chrono::steady_clock::time_point defrag_time{};
+    std::chrono::steady_clock::time_point defrag_logged{};
+    u64 defrag_passes{};
+    u64 defrag_images{};
+    u64 defrag_bytes{};
+    u64 defrag_freed_bytes{};
+    u64 defrag_freed_blocks{};
     std::chrono::steady_clock::time_point drain_time{};
     std::chrono::steady_clock::time_point drain_logged{};
     u64 drain_passes{};

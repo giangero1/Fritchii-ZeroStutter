@@ -227,7 +227,12 @@ void MemoryCommit::Release() {
             vmaUnmapMemory(allocator, allocation);
             mapped_ptr = nullptr;
         }
-        vmaFreeMemory(allocator, allocation);
+        if (!vk::DefragGuard::Defer(allocator, allocation,
+                                    [allocator = allocator, allocation = allocation] {
+                                        vmaFreeMemory(allocator, allocation);
+                                    })) {
+            vmaFreeMemory(allocator, allocation);
+        }
     }
     allocation = nullptr;
     allocator = nullptr;
@@ -1347,6 +1352,12 @@ VmaAllocation MemoryAllocator::AllocateSparseMemory(const VkMemoryRequirements &
 void MemoryAllocator::FreeSparseMemory(VmaAllocation allocation) const {
     if (allocation != VK_NULL_HANDLE) {
         const VideoCommon::MemoryStageLink::AllocatorOp allocator_op{allocator};
+        if (vk::DefragGuard::Defer(allocator, allocation,
+                                   [allocator = allocator, allocation = allocation] {
+                                       vmaFreeMemory(allocator, allocation);
+                                   })) {
+            return;
+        }
         vmaFreeMemory(allocator, allocation);
     }
 }

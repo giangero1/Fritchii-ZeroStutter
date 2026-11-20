@@ -34,6 +34,7 @@
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 #include "video_core/nx2_ghost_pools.h"
 #include "video_core/texture_cache/image_view_base.h"
+#include "video_core/vulkan_common/vma.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
@@ -209,6 +210,36 @@ public:
     /// FRITCHII_VRAM_BUDGET_MODE: the main heap's size and the driver's usage and budget for it
     /// (Device::MainHeapNumbers). False without VK_EXT_memory_budget.
     bool MainHeapNumbers(u64& size, u64& usage, u64& budget) const;
+
+    /// FRITCHII_VRAM_DEFRAG (boot, default 1; 0 off; ZeroStutter): moves images out of
+    /// half-empty device memory blocks so the blocks go back to the driver (see
+    /// TextureCache::DefragImages). Off when images are freed on a thread of their own.
+    [[nodiscard]] bool DefragEnabled() const noexcept;
+    [[nodiscard]] bool DefragPassOpen() const noexcept {
+        return defrag_context != nullptr;
+    }
+    /// Starts a VMA defragmentation pass when the main allocator's device local blocks hold at
+    /// least `min_slack` unused bytes. `sources` gets each listed move's allocation (as a key,
+    /// see Image::DefragKey), by move index. False: no pass.
+    bool DefragBegin(u64 min_slack, std::vector<u64>& sources);
+    /// Moves `image` (the pass's move `index`): a new image at the place VMA reserved, the old
+    /// one's contents copied there on the GPU. False: the move is cancelled.
+    bool DefragMoveImage(size_t index, Image& image);
+    /// The moves are decided: the pass ends once the GPU is past their copies (DefragPoll).
+    void DefragSubmit();
+    struct DefragStats {
+        u64 moved_images{};
+        u64 moved_bytes{};
+        u64 freed_bytes{};
+        u64 freed_blocks{};
+        u64 cancelled{};
+        u64 deferred_frees{};
+    };
+    /// Ends the open pass once the GPU is done with the old places. True when it ended.
+    bool DefragPoll(DefragStats& stats);
+    /// Once a frame: destroys old handles of ended passes once no view of them is left (the
+    /// texture cache keeps deleted views TICKS_TO_DESTROY frames).
+    void DefragTick();
 
     /// FRITCHII_VRAM_BUDGET_MODE=os: dedicated video memory the other processes hold on this
     /// adapter (the OS's counters, Common::GetAdapterVideoMemory). None before the first sample,
@@ -454,6 +485,24 @@ public:
     std::vector<PendingTranscode> free_transcodes;
     /// FRITCHII_ASTC_SCRATCH_CAP_MIB: textures deferred since a decode last finished.
     u32 astc_deferrals_in_a_row{};
+
+    /// FRITCHII_VRAM_DEFRAG: the open defragmentation pass (null: none).
+    VmaDefragmentationContext defrag_context{};
+    VmaDefragmentationPassMoveInfo defrag_pass{};
+    u64 defrag_tick{};
+    u64 defrag_moved{};
+    u64 defrag_moved_bytes{};
+    u64 defrag_listed{};
+    std::vector<VkImage> defrag_old_images;
+    /// Image::DefragLeftovers (Image is declared later), destroyed with the old handles.
+    std::vector<std::shared_ptr<void>> defrag_leftovers;
+    /// Old handles (and leftovers) of ended passes, with the frames they still wait.
+    struct DefragGrave {
+        u32 frames_left;
+        std::vector<VkImage> images;
+        std::vector<std::shared_ptr<void>> leftovers;
+    };
+    std::vector<DefragGrave> defrag_graveyard;
 
     std::optional<BlockLinearUnswizzle3DPass> bl3d_unswizzle_pass;
     const Settings::ResolutionScalingInfo& resolution;
@@ -828,6 +877,39 @@ public:
         return from_pool;
     }
 
+    /// FRITCHII_VRAM_DEFRAG: what the GPU may still use of the image's old place after a move.
+    /// The runtime destroys it once the GPU is past the move's copy.
+    struct DefragLeftovers {
+        VkImage old_image{};
+        std::vector<vk::ImageView> views;
+        std::unique_ptr<ImageView> normal_view;
+        std::unique_ptr<ImageView> scale_view;
+        std::optional<Framebuffer> normal_framebuffer;
+        std::optional<Framebuffer> scale_framebuffer;
+    };
+
+    /// FRITCHII_VRAM_DEFRAG: true when the image can move to another place in device memory: a
+    /// plain backed, single-sample image made here, not rescaled, with transfer usage.
+    [[nodiscard]] bool CanDefragMove() const noexcept;
+
+    /// FRITCHII_VRAM_DEFRAG: original_image's allocation as a key (0: none).
+    [[nodiscard]] u64 DefragKey() const noexcept {
+        return reinterpret_cast<u64>(original_image.Allocation());
+    }
+
+    /// FRITCHII_VRAM_DEFRAG: what original_image was made with (pNext left out: see
+    /// DefragViewFormats), to make it again at its new place.
+    [[nodiscard]] const VkImageCreateInfo& DefragCreateInfo() const noexcept {
+        return defrag_ci;
+    }
+    [[nodiscard]] std::span<const VkFormat> DefragViewFormats() const noexcept {
+        return defrag_view_formats;
+    }
+
+    /// FRITCHII_VRAM_DEFRAG: original_image becomes `new_handle` (bound to the allocation's new
+    /// place, its contents copied there). Views of the old handle go to the leftovers.
+    [[nodiscard]] DefragLeftovers SwapForDefrag(VkImage new_handle);
+
     /// EXP42: the deleted image's VkImages go to the runtime's pool instead of being destroyed,
     /// when eligible. Called once the GPU is done with them (TextureCache::TickFrame).
     void ReleaseToPool();
@@ -994,6 +1076,10 @@ private:
     ImagePoolKey original_pool_key;
     ImagePoolKey scaled_pool_key;
     bool from_pool = false; ///< original_image came from the pool
+    /// FRITCHII_VRAM_DEFRAG: original_image's create info and view formats, filled in by its
+    /// initializer (declared before it for that).
+    VkImageCreateInfo defrag_ci{};
+    std::span<const VkFormat> defrag_view_formats;
 
     vk::Image original_image;
     vk::Image scaled_image;

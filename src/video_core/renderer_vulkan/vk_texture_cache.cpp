@@ -45,6 +45,7 @@
 #include "video_core/renderer_vulkan/framebuffer_limits.h"
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
 #include "video_core/renderer_vulkan/vk_compute_pass.h"
+#include "video_core/renderer_vulkan/vk_gpu_zones.h"
 #include "video_core/renderer_vulkan/vk_ocarina_camera_motion.h"
 #include "video_core/renderer_vulkan/vk_fsr4_upscaler.h"
 #include "video_core/renderer_vulkan/vk_render_pass_cache.h"
@@ -516,7 +517,9 @@ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM
                                   std::optional<VkFormat> format_override = {},
                                   bool unbacked = false, bool aliased = false,
                                   bool may_fail = false, TextureCacheRuntime* pool = nullptr,
-                                  ImagePoolKey* pool_key = nullptr, bool* pooled = nullptr) {
+                                  ImagePoolKey* pool_key = nullptr, bool* pooled = nullptr,
+                                  VkImageCreateInfo* defrag_ci = nullptr,
+                                  std::span<const VkFormat>* defrag_view_formats = nullptr) {
     if (info.type == ImageType::Buffer) {
         return vk::Image{};
     }
@@ -542,6 +545,15 @@ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM
 
         if (device.IsKhrImageFormatListSupported()) {
             image_ci.pNext = &image_format_list;
+        }
+    }
+    // FRITCHII_VRAM_DEFRAG: kept to make the image again at another place (a pooled image was
+    // made with this same create info: the pool key matches it field by field).
+    if (defrag_ci != nullptr && !unbacked) {
+        *defrag_ci = image_ci;
+        defrag_ci->pNext = nullptr;
+        if (defrag_view_formats != nullptr) {
+            *defrag_view_formats = view_formats;
         }
     }
     // EXP42: single-level, single-layer render targets can come from (and go back to) the pool.
@@ -2902,6 +2914,288 @@ bool TextureCacheRuntime::MainHeapNumbers(u64& size, u64& usage, u64& budget) co
     return device.MainHeapNumbers(size, usage, budget);
 }
 
+bool TextureCacheRuntime::DefragEnabled() const noexcept {
+    static const bool enabled = [] {
+        const char* value = std::getenv("FRITCHII_VRAM_DEFRAG");
+        return value == nullptr || value[0] != '0';
+    }();
+    // The main VMA allocator is used from this thread only, unless images are freed on a
+    // thread of their own (EDEN_NX2_ASYNC_IMAGE_FREE=1); defragmenting then is left out.
+    return enabled && !device.IsAllocatorThreadSafe();
+}
+
+bool TextureCacheRuntime::DefragBegin(u64 min_slack, std::vector<u64>& sources) {
+    sources.clear();
+    if (defrag_context != nullptr) {
+        return false;
+    }
+    const VmaAllocator allocator = device.GetAllocator();
+    const VkPhysicalDeviceMemoryProperties* properties{};
+    vmaGetMemoryProperties(allocator, &properties);
+    std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> budgets{};
+    vmaGetHeapBudgets(allocator, budgets.data());
+    u64 slack = 0;
+    for (u32 heap = 0; heap < properties->memoryHeapCount; ++heap) {
+        if ((properties->memoryHeaps[heap].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) == 0) {
+            continue;
+        }
+        const VmaStatistics& stats = budgets[heap].statistics;
+        if (stats.blockBytes > stats.allocationBytes) {
+            slack += stats.blockBytes - stats.allocationBytes;
+        }
+    }
+    if (slack < min_slack) {
+        return false;
+    }
+    // A clear waiting to be recorded may name an image's handle from before a move.
+    FlushDeferredClear();
+    VmaDefragmentationInfo info{};
+    info.flags = VMA_DEFRAGMENTATION_FLAG_ALGORITHM_BALANCED_BIT;
+    info.pool = nullptr; // the default pools, where the texture cache's images are
+    info.maxBytesPerPass = u64{64} << 20;
+    info.maxAllocationsPerPass = 64;
+    if (vmaBeginDefragmentation(allocator, &info, &defrag_context) != VK_SUCCESS) {
+        defrag_context = nullptr;
+        return false;
+    }
+    defrag_pass = {};
+    const VkResult result = vmaBeginDefragmentationPass(allocator, defrag_context, &defrag_pass);
+    if (result != VK_INCOMPLETE || defrag_pass.moveCount == 0) {
+        if (result == VK_INCOMPLETE) {
+            vmaEndDefragmentationPass(allocator, defrag_context, &defrag_pass);
+        }
+        vmaEndDefragmentation(allocator, defrag_context, nullptr);
+        defrag_context = nullptr;
+        defrag_pass = {};
+        return false;
+    }
+    std::vector<VmaAllocation> listed;
+    listed.reserve(defrag_pass.moveCount);
+    sources.reserve(defrag_pass.moveCount);
+    for (u32 index = 0; index < defrag_pass.moveCount; ++index) {
+        VmaDefragmentationMove& move = defrag_pass.pMoves[index];
+        listed.push_back(move.srcAllocation);
+        sources.push_back(reinterpret_cast<u64>(move.srcAllocation));
+        // Cancelled until DefragMoveImage takes it: allocations that are not the texture
+        // cache's images (or cannot move now) stay where they are.
+        move.operation = VMA_DEFRAGMENTATION_MOVE_OPERATION_IGNORE;
+    }
+    // VMA: the listed allocations must not be freed before the pass ends.
+    vk::DefragGuard::Open(allocator, listed);
+    defrag_moved = 0;
+    defrag_moved_bytes = 0;
+    defrag_listed = defrag_pass.moveCount;
+    defrag_tick = 0;
+    return true;
+}
+
+bool TextureCacheRuntime::DefragMoveImage(size_t index, Image& image) {
+    if (defrag_context == nullptr || index >= defrag_pass.moveCount || !image.CanDefragMove()) {
+        return false;
+    }
+    VmaDefragmentationMove& move = defrag_pass.pMoves[index];
+    if (reinterpret_cast<u64>(move.srcAllocation) != image.DefragKey()) {
+        return false;
+    }
+    const VmaAllocator allocator = device.GetAllocator();
+    const vk::DeviceDispatch& dld = device.GetDispatchLoader();
+    const VkDevice logical = *device.GetLogical();
+    VkImageCreateInfo image_ci = image.DefragCreateInfo();
+    const std::span<const VkFormat> view_formats = image.DefragViewFormats();
+    const VkImageFormatListCreateInfo format_list{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO,
+        .pNext = nullptr,
+        .viewFormatCount = static_cast<u32>(view_formats.size()),
+        .pViewFormats = view_formats.data(),
+    };
+    if (view_formats.size() > 1 && device.IsKhrImageFormatListSupported()) {
+        image_ci.pNext = &format_list;
+    }
+    VkImage new_image{};
+    if (dld.vkCreateImage(logical, &image_ci, nullptr, &new_image) != VK_SUCCESS) {
+        return false;
+    }
+    // The reserved place has the old allocation's size and alignment; check that the new
+    // image fits it anyway before binding.
+    VkMemoryRequirements requirements{};
+    dld.vkGetImageMemoryRequirements(logical, new_image, &requirements);
+    VmaAllocationInfo dst_info{};
+    vmaGetAllocationInfo(allocator, move.dstTmpAllocation, &dst_info);
+    if (requirements.size > dst_info.size || requirements.alignment == 0 ||
+        dst_info.offset % requirements.alignment != 0 ||
+        (requirements.memoryTypeBits & (1U << dst_info.memoryType)) == 0 ||
+        vmaBindImageMemory(allocator, move.dstTmpAllocation, new_image) != VK_SUCCESS) {
+        dld.vkDestroyImage(logical, new_image, nullptr);
+        return false;
+    }
+    const VkImage old_image = image.Handle();
+    const VkImageAspectFlags aspect = image.AspectMask();
+    boost::container::small_vector<VkImageCopy, 16> regions;
+    for (u32 level = 0; level < image_ci.mipLevels; ++level) {
+        const VkImageSubresourceLayers layers{
+            .aspectMask = aspect,
+            .mipLevel = level,
+            .baseArrayLayer = 0,
+            .layerCount = image_ci.arrayLayers,
+        };
+        regions.push_back(VkImageCopy{
+            .srcSubresource = layers,
+            .srcOffset = {0, 0, 0},
+            .dstSubresource = layers,
+            .dstOffset = {0, 0, 0},
+            .extent =
+                {
+                    .width = std::max(1U, image_ci.extent.width >> level),
+                    .height = std::max(1U, image_ci.extent.height >> level),
+                    .depth = std::max(1U, image_ci.extent.depth >> level),
+                },
+        });
+    }
+    scheduler.RequestOutsideRenderPassOperationContext();
+    scheduler.Record([old_image, new_image, aspect, regions](vk::CommandBuffer cmdbuf) {
+        const VkImageSubresourceRange range{
+            .aspectMask = aspect,
+            .baseMipLevel = 0,
+            .levelCount = VK_REMAINING_MIP_LEVELS,
+            .baseArrayLayer = 0,
+            .layerCount = VK_REMAINING_ARRAY_LAYERS,
+        };
+        constexpr VkAccessFlags any_write =
+            VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+        constexpr VkAccessFlags any_access =
+            VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
+            VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT |
+            VK_ACCESS_TRANSFER_WRITE_BIT;
+        const std::array pre_barriers{
+            VkImageMemoryBarrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = any_write,
+                .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = old_image,
+                .subresourceRange = range,
+            },
+            VkImageMemoryBarrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = 0,
+                .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = new_image,
+                .subresourceRange = range,
+            },
+        };
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                               0, nullptr, nullptr, pre_barriers);
+        cmdbuf.CopyImage(old_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, new_image,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, regions);
+        const std::array post_barriers{
+            VkImageMemoryBarrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .dstAccessMask = any_access,
+                .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = new_image,
+                .subresourceRange = range,
+            },
+            // The old image back in GENERAL, as anything still recorded for it expects.
+            VkImageMemoryBarrier{
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+                .dstAccessMask = 0,
+                .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = old_image,
+                .subresourceRange = range,
+            },
+        };
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                               0, nullptr, nullptr, post_barriers);
+    });
+    auto leftovers = std::make_shared<Image::DefragLeftovers>(image.SwapForDefrag(new_image));
+    defrag_old_images.push_back(leftovers->old_image);
+    leftovers->old_image = VkImage{};
+    defrag_leftovers.push_back(std::move(leftovers));
+    move.operation = VMA_DEFRAGMENTATION_MOVE_OPERATION_COPY;
+    ++defrag_moved;
+    defrag_moved_bytes += dst_info.size;
+    return true;
+}
+
+void TextureCacheRuntime::DefragTick() {
+    if (defrag_graveyard.empty()) {
+        return;
+    }
+    const vk::DeviceDispatch& dld = device.GetDispatchLoader();
+    const VkDevice logical = *device.GetLogical();
+    std::erase_if(defrag_graveyard, [&](DefragGrave& grave) {
+        if (grave.frames_left > 0) {
+            --grave.frames_left;
+            return false;
+        }
+        grave.leftovers.clear(); // views and framebuffers before their images
+        for (const VkImage image : grave.images) {
+            dld.vkDestroyImage(logical, image, nullptr);
+        }
+        return true;
+    });
+}
+
+void TextureCacheRuntime::DefragSubmit() {
+    defrag_tick = scheduler.CurrentTick();
+}
+
+bool TextureCacheRuntime::DefragPoll(DefragStats& stats) {
+    if (defrag_context == nullptr) {
+        return false;
+    }
+    // The old places stay until the GPU is past the copies (and so past every earlier use).
+    if (defrag_moved != 0 && !scheduler.IsFree(defrag_tick)) {
+        return false;
+    }
+    // The old handles outlive their memory for a few frames (legal while unused): views of
+    // them deleted by InvalidateScale are destroyed TICKS_TO_DESTROY frames later.
+    if (!defrag_old_images.empty() || !defrag_leftovers.empty()) {
+        defrag_graveyard.push_back(DefragGrave{
+            .frames_left = 12,
+            .images = std::move(defrag_old_images),
+            .leftovers = std::move(defrag_leftovers),
+        });
+    }
+    defrag_old_images.clear();
+    defrag_leftovers.clear();
+    const VmaAllocator allocator = device.GetAllocator();
+    vmaEndDefragmentationPass(allocator, defrag_context, &defrag_pass);
+    VmaDefragmentationStats vma_stats{};
+    vmaEndDefragmentation(allocator, defrag_context, &vma_stats);
+    defrag_context = nullptr;
+    defrag_pass = {};
+    stats.deferred_frees = vk::DefragGuard::Close();
+    stats.moved_images = defrag_moved;
+    stats.moved_bytes = defrag_moved_bytes;
+    stats.freed_bytes = vma_stats.bytesFreed;
+    stats.freed_blocks = vma_stats.deviceMemoryBlocksFreed;
+    stats.cancelled = defrag_listed - defrag_moved;
+    return true;
+}
+
 std::optional<u64> TextureCacheRuntime::OtherProcessesVideoMemory() const {
     if (luid_state == 0) {
         luid_state = device.GetDeviceLuid(luid_low, luid_high) ? 1 : 2;
@@ -3844,7 +4138,8 @@ Image::Image(TextureCacheRuntime& runtime_, const ImageInfo& info_, GPUVAddr gpu
                                    IsUnwrittenSparse(runtime_.device, info, gpu_addr_),
                                UsesSparseTiles(runtime_.device, info, gpu_addr_) &&
                                    SparseTilesModeOf(runtime_.device) == SparseTilesMode::Aliased,
-                               true, &runtime_, &original_pool_key, &from_pool)),
+                               true, &runtime_, &original_pool_key, &from_pool, &defrag_ci,
+                               &defrag_view_formats)),
       aspect_mask(ImageAspectMask(info.format)) {
     if (OutOfMemory()) {
         return;
@@ -3922,6 +4217,50 @@ Image::Image(TextureCacheRuntime& runtime_, const ImageInfo& info_, GPUVAddr gpu
 }
 
 Image::Image(const VideoCommon::NullImageParams& params) : VideoCommon::ImageBase{params} {}
+
+bool Image::CanDefragMove() const noexcept {
+    using VideoCommon::ImageFlagBits;
+    constexpr ImageFlagBits unusual = ImageFlagBits::Sparse | ImageFlagBits::SparseLayers |
+                                      ImageFlagBits::SparseTiles | ImageFlagBits::UnwrittenSparse |
+                                      ImageFlagBits::Unbacked;
+    constexpr VkImageUsageFlags transfer =
+        VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    return runtime != nullptr && defrag_ci.sType == VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO &&
+           original_image && !original_image.IsUnbacked() &&
+           original_image.Allocation() != nullptr && !scaled_image &&
+           current_image == &Image::original_image && False(flags & unusual) &&
+           sparse_layers.allocator == nullptr && defrag_ci.samples == VK_SAMPLE_COUNT_1_BIT &&
+           (defrag_ci.flags & VK_IMAGE_CREATE_SPARSE_BINDING_BIT) == 0 &&
+           (defrag_ci.usage & transfer) == transfer && !scale_view && !scale_framebuffer;
+}
+
+Image::DefragLeftovers Image::SwapForDefrag(VkImage new_handle) {
+    DefragLeftovers leftovers;
+    leftovers.old_image = original_image.ExchangeHandle(new_handle);
+    if (ENABLE_MSAA_RESOLVE_CONSUME && runtime != nullptr) {
+        runtime->EraseResolveShadow(leftovers.old_image);
+    }
+    // Views of the old handle: made again on demand (StorageImageView, BlitScaleHelper).
+    for (vk::ImageView& view : storage_image_views) {
+        if (view) {
+            leftovers.views.push_back(std::move(view));
+        }
+        view = vk::ImageView{};
+    }
+    for (vk::ImageView& view : storage_layer_views) {
+        if (view) {
+            leftovers.views.push_back(std::move(view));
+        }
+        view = vk::ImageView{};
+    }
+    leftovers.normal_view = std::move(normal_view);
+    leftovers.normal_framebuffer = std::move(normal_framebuffer);
+    normal_framebuffer.reset();
+    if (runtime != nullptr && runtime->device.HasDebuggingToolAttached()) {
+        original_image.SetObjectNameEXT(VideoCommon::Name(*this).c_str());
+    }
+    return leftovers;
+}
 
 void Image::ReleaseToPool() {
     using VideoCommon::ImageFlagBits;
@@ -6131,6 +6470,8 @@ void TextureCacheRuntime::AccelerateImageUpload(
     u32 z_start, u32 z_count) {
 
     if (IsPixelFormatASTC(image.info.format)) {
+        // FRITCHII_GPU_ZONES: the decode's GPU time.
+        const GpuZones::Scope gpu_zone{device, scheduler, GpuZones::Zone::TextureDecode};
         if (bc_encoder_pass && WillUseGpuBcnTranscode(device, image.info)) {
             return TranscodeAstcToBcn(image, map, swizzles);
         }
@@ -6155,6 +6496,7 @@ void TextureCacheRuntime::AccelerateImageUpload(
 void TextureCacheRuntime::AccelerateImageUploadLayers(
     Image& image, const StagingBufferRef& map,
     std::span<const VideoCommon::SwizzleParameters> swizzles, std::span<const u32> layers) {
+    const GpuZones::Scope gpu_zone{device, scheduler, GpuZones::Zone::TextureDecode};
     astc_decoder_pass->AssembleLayers(image, map, swizzles, layers);
 }
 
