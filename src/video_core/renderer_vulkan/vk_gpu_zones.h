@@ -20,7 +20,7 @@
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
-/// FRITCHII_GPU_ZONES (boot, default 1 in this test build; 0 off; ZeroStutter): GPU time of
+/// FRITCHII_GPU_ZONES (boot, default 0 since v6.2.2, 1 on; ZeroStutter): GPU time of
 /// the work the 4K output adds, measured with a timestamp pair around each pass, so a normal
 /// play session says where the GPU's time goes (the daytime Castle Town market: 48 ms a frame
 /// at 1440p -> 4K DLSS + frame generation, 20.7 ms at native 1440p). Each zone keeps a ring of
@@ -50,7 +50,7 @@ public:
     static bool Enabled() {
         static const bool enabled = [] {
             const char* value = std::getenv("FRITCHII_GPU_ZONES");
-            return value == nullptr || value[0] != '0';
+            return value != nullptr && value[0] != '\0' && value[0] != '0';
         }();
         return enabled;
     }
@@ -95,6 +95,30 @@ public:
             state.pending.push_back(slot);
         }
         LogIfDue(); // takes the zones' locks itself
+    }
+
+    /// The renderer's teardown, with the device still alive: destroys the query pools. They
+    /// belong to that device: kept in this process-wide object, a game stopped and started again
+    /// used the dead device's pools, and the process' exit destroyed them through the dead
+    /// device's function table (an access violation in vkDestroyQueryPool, v6.2.1).
+    void DestroyPools() {
+        for (ZoneState& state : zones) {
+            std::scoped_lock lock{state.mutex};
+            state.pool.reset();
+            state.failed = false;
+            state.next = 0;
+            state.pending.clear();
+            state.passes = 0;
+            state.total_ns = 0;
+            state.max_ns = 0;
+        }
+    }
+
+    ~Timer() {
+        // At exit the device may be gone: a pool still here is let go, never destroyed.
+        for (ZoneState& state : zones) {
+            void(state.pool.release());
+        }
     }
 
 private:

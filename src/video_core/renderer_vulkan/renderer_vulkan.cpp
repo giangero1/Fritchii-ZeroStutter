@@ -29,6 +29,7 @@
 #endif
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 #include "video_core/renderer_vulkan/vk_blit_screen.h"
+#include "video_core/renderer_vulkan/vk_gpu_zones.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_state_tracker.h"
@@ -244,6 +245,8 @@ try
 RendererVulkan::~RendererVulkan() {
     scheduler.RegisterOnSubmit([] {});
     void(device.GetLogical().WaitIdle());
+    // FRITCHII_GPU_ZONES: its query pools go with this device, not at the process' exit.
+    GpuZones::Timer::Get().DestroyPools();
 }
 
 void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebuffers) {

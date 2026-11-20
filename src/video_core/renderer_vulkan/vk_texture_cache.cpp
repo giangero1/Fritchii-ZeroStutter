@@ -6561,7 +6561,33 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
         for (const PendingTranscode& t : pending_transcodes) {
             in_flight += scratch_bytes(t.width, t.height, t.levels, t.layers);
         }
-        if (in_flight >= scratch_cap && astc_deferrals_in_a_row >= 32) {
+        // v6.2.2: the cap only holds a texture back when VRAM is near the budget (the main
+        // heap past 7/8 of it, as the driver counts it). A 12 GB RTX 4070 at 1.2 of 11 GB had
+        // every area load held back for nothing: each deferral waits for a frame, and a load
+        // has a frame every ~2 s, so loads took ~28 s instead of 4-7 s. Without
+        // VK_EXT_memory_budget the cap applies as before.
+        bool vram_tight = true;
+        if (in_flight >= scratch_cap) {
+            u64 usage{};
+            u64 budget{};
+            if (device.MainHeapUsage(usage, budget) && budget != 0) {
+                vram_tight = usage >= budget - budget / 8;
+            }
+            if (!vram_tight) {
+                static u64 let_through{};
+                ++let_through;
+                if (let_through <= 3 || let_through % 1000 == 0) {
+                    LOG_INFO(Render_Vulkan,
+                             "ASTC scratch cap (FRITCHII_ASTC_SCRATCH_CAP_MIB): {} MiB of decode "
+                             "images in flight, VRAM {} of {} MiB: room left, not held back "
+                             "({} so far)",
+                             in_flight >> 20, usage >> 20, budget >> 20, let_through);
+                }
+            }
+        }
+        if (in_flight >= scratch_cap && !vram_tight) {
+            astc_deferrals_in_a_row = 0;
+        } else if (in_flight >= scratch_cap && astc_deferrals_in_a_row >= 32) {
             astc_deferrals_in_a_row = 0;
         } else if (in_flight >= scratch_cap) {
             ++astc_deferrals_in_a_row;
