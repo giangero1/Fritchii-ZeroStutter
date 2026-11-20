@@ -45,6 +45,8 @@ The trade-off: textures get deleted and loaded again more often, so you may see 
 
 *RTX 3070 8 GB + Ryzen 7 5800X3D, Castle Town market by day (46 FPS) and by night (50 FPS), 1440p → 4K DLSS, **frame generation off**.*
 
+> **Known issue: switching to fullscreen while a game is running can crash.** Changing the window mode during play (for example from borderless to exclusive fullscreen) can crash in the NVIDIA driver. Choose your mode **before** starting a game: Emulation → Configure → Graphics → **Fullscreen Mode**. **Borderless Windowed** is recommended; it performs about the same on Windows 10/11.
+
 ---
 
 ## 🆕 New in v6.2.1: VRAM defragmentation (daytime Castle Town market at 4K)
