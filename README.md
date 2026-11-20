@@ -1,4 +1,4 @@
-# Fritchii Zero-Stutter Custom Build (v6.2.1)
+# Fritchii Zero-Stutter Custom Build (v6.2.2)
 ### *The Legend of Zelda: Ocarina of Time (Nintendo Switch 2 Remake) on PC*
 
 [![Release](https://img.shields.io/github/v/release/giangero1/Fritchii-ZeroStutter?color=brightgreen&label=Release)](https://github.com/giangero1/Fritchii-ZeroStutter/releases)
@@ -12,6 +12,38 @@ The **v6.2 Zero-Stutter update** moves the engine onto **upstream Fritchii v6.2*
 3. **10–20 seconds of very low FPS after entering a new area** on 8 GB cards. It now recovers in **1–2 s** on most loads, even with a browser and a Twitch stream open next to the game.
 
 > ⚠️ **Test release.** It was measured on one PC (RTX 3070 8 GB + 5800X3D). If anything looks or runs worse for you, every fix below has its own off-switch. **Provided as is, with no support.**
+
+---
+
+## 🆕 New in v6.2.2: 4K on 8 GB cards stays smooth in the market, faster loads on 10 GB+ cards
+
+**1. Coming back to the Castle Town market at 4K on an 8 GB card.** On an **RTX 3070 8 GB** at **1440p → 4K DLSS**, the daytime market ran fine on the first visit. But after going outside and back, or after walking around it for a few minutes, the FPS slowly dropped to **5–8 and never came back**. The cause: the market at 4K needs nearly all of an 8 GB card. Other apps (browser, Discord, the desktop) use ~1 GB more. Once the card was full, the NVIDIA driver moved part of the game's VRAM into normal RAM, and every frame got slow. Three things kept the emulator from freeing memory in time:
+- **Leftovers from the previous area:** half-empty memory blocks, a pool of old render images, and textures the clean-up thought were still recent.
+- **The VRAM budget didn't count other apps.** The emulator aimed at ~7 GB when only ~6 GB was really free.
+- **The texture cache protected everything used in the last ~10–15 s** (to avoid reloading the same textures), so while you walked around the market almost nothing could be freed.
+
+What v6.2.2 does on cards under 9 GB (bigger cards are not affected):
+- **Area clean (`FRITCHII_AREA_CLEAN`, on by default):** for 8 s after an area starts loading, the old area's leftovers go: the image pool is emptied, textures not drawn in the last 15 frames are deleted (they load again if needed), half-empty blocks are packed together and given back.
+- **The budget counts other apps' VRAM**, and the emulator aims **1.5 GB** under it (was 1 GB). `FRITCHII_VRAM_BUDGET_MODE` and `FRITCHII_VRAM_HEADROOM_MIB` still override this.
+- **When VRAM is over that target, the texture cache only protects the last ~60 frames** instead of 600, and its limit can go lower, so it can free textures you just walked away from.
+
+Same route on the RTX 3070 (market → outside → market, walking around, talking to NPCs): average **66 → 73 FPS**, 1% low **9 → 24 FPS**, frames over 100 ms **178 → 20**. Going back into the market three times in a row and talking to many NPCs stayed smooth.
+
+The trade-off: textures get deleted and loaded again more often, so you may see a little pop-in, or a short dip when something big appears (like the close-up when you talk to an NPC). 4K on 8 GB is still right at the limit: closing GPU-heavy apps (or turning off their hardware acceleration) gives the game more room. To get the old behaviour: `FRITCHII_AREA_CLEAN=0`, `FRITCHII_VRAM_BUDGET_MODE=1`, `FRITCHII_VRAM_HEADROOM_MIB=1024`.
+
+**2. Area loads on bigger cards.** v6.2's ASTC scratch cap (`FRITCHII_ASTC_SCRATCH_CAP_MIB`) held textures back during area loads, so 8 GB cards don't overflow VRAM. It did that on every card, even with lots of VRAM free. On a tester's **RTX 4070 12 GB** (1.2 of 11 GB used) each area load took **~28 s**; with the cap off, **~4–7 s**. Now, on cards of 9 GB and up, the cap only holds textures back when VRAM is past 7/8 of the budget. Cards under 9 GB always keep it, as in v6.2.1.
+
+**3. Crash when closing Fritchii (and when restarting a game) fixed.** v6.2.1's GPU timers (`FRITCHII_GPU_ZONES`) kept Vulkan objects alive after the game stopped. Closing Fritchii could then crash, and starting a game again in the same window used the old ones. They're now cleaned up when the game stops, and the timers are **off by default** (`FRITCHII_GPU_ZONES=1` turns them on).
+
+**4. OBS / Medal Vulkan game capture is off, also without the launcher.** A tester's game froze while loading shaders with OBS's game-capture hook inside Fritchii, and pressing Stop then crashed the NVIDIA driver. The launcher already turned these capture layers off; now `fritchii.exe` does it too when started directly. To stream, use OBS's **window** or **display** capture, or set `DISABLE_VULKAN_OBS_CAPTURE=0` before starting Fritchii.
+
+**5. The window title shows the fork version** ("Zero-Stutter fork v6.2.2"), next to the Fritchii version it's based on.
+
+![Fritchii v6.2.2 Zero-Stutter, daytime Castle Town market on an RTX 3070 8 GB: 1440p → 4K DLSS Quality J, frame generation off, 46 FPS](docs/fritchii-6.2.2-rtx3070-4k-market-day.webp)
+
+![Fritchii v6.2.2 Zero-Stutter, night Castle Town market on an RTX 3070 8 GB: 1440p → 4K DLSS Quality J, frame generation off, 50 FPS](docs/fritchii-6.2.2-rtx3070-4k-market-night.webp)
+
+*RTX 3070 8 GB + Ryzen 7 5800X3D, Castle Town market by day (46 FPS) and by night (50 FPS), 1440p → 4K DLSS, **frame generation off**.*
 
 ---
 
@@ -36,7 +68,7 @@ The cause: textures share 32 MB memory blocks, and a block only goes back to Win
 
 *Honest note:* in one longer session (time travel back and forth before the market) the same scene still ran at ~19 game FPS without crashing, so results can vary with how much VRAM has built up.
 
-**Also new:** `FRITCHII_GPU_ZONES` writes a line to the log every 10 s with how much GPU time DLSS, frame generation and texture decoding take. In the market DLSS takes ~4 ms a frame and frame generation under 1 ms. Set it to `0` to turn it off.
+**Also new:** `FRITCHII_GPU_ZONES` (off since v6.2.2, `=1` turns it on) writes a line to the log every 10 s with how much GPU time DLSS, frame generation and texture decoding take. In the market DLSS takes ~4 ms a frame and frame generation under 1 ms.
 
 ---
 
@@ -116,7 +148,7 @@ The VRAM changes were made for 8 GB cards, but they help on 6 GB too. Upstream r
 
 ![Fritchii Zero-Stutter 4K 127 FPS — 1440p to 4K DLSS Quality J + DLSS-G 2X on RTX 3070](docs/fritchii-6.0-4k-127fps.png)
 
-### 4. Portable Launcher (`Play-Fritchii-6.2.1-ZeroStutter.cmd`)
+### 4. Portable Launcher (`Play-Fritchii-6.2.2-ZeroStutter.cmd`)
 * Starts `fritchii.exe` at high priority, turns the Graphics Pipeline Library (GPL) off, and sets the Zero-Stutter environment flags.
 
 ---
@@ -130,8 +162,8 @@ Still recommended for v6.2. The used list builds at boot, and everything else bu
 
 The zip already has the right folders: extract it straight into your emulator folder (next to `fritchii.exe`), or put `vulkan-frizti.fork-v54.bin` and `vulkan_used-frizti.fork-v54.bin` into:
 ```text
-fritchii-v6.2.1-zerostutter-win64/
-├── Play-Fritchii-6.2.1-ZeroStutter.cmd
+fritchii-v6.2.2-zerostutter-win64/
+├── Play-Fritchii-6.2.2-ZeroStutter.cmd
 ├── nx2_switches.txt
 ├── fritchii.exe
 ├── lichii.exe
@@ -159,7 +191,7 @@ To get them:
 
 ## ⚙️ CPU Core & Thread Tuning (For 6-Core & 4-Core Users)
 
-If your CPU has fewer than 8 cores, open `Play-Fritchii-6.2.1-ZeroStutter.cmd` (or **Tools → Switches** / `nx2_switches.txt`) and adjust `EDEN_NX2_WARM_THREADS`:
+If your CPU has fewer than 8 cores, open `Play-Fritchii-6.2.2-ZeroStutter.cmd` (or **Tools → Switches** / `nx2_switches.txt`) and adjust `EDEN_NX2_WARM_THREADS`:
 
 | CPU Cores / Threads | Example Processors | Recommended `WARM_THREADS` |
 | :--- | :--- | :---: |
@@ -171,11 +203,11 @@ If your CPU has fewer than 8 cores, open `Play-Fritchii-6.2.1-ZeroStutter.cmd` (
 
 ## 🚀 Quick Start Guide
 
-1. Download **`fritchii-v6.2.1-zerostutter-win64.zip`** from [Releases](https://github.com/giangero1/Fritchii-ZeroStutter/releases/latest).
-2. Extract it into a clean folder (e.g. `D:\Games\Fritchii-6.2.1-ZeroStutter`). Coming from v6.2 or v6.0? You can copy your old `user` folder over (saves, config, shader cache), or just replace `fritchii.exe` and `lichii.exe` in your v6.2 folder.
+1. Download **`fritchii-v6.2.2-zerostutter-win64.zip`** from [Releases](https://github.com/giangero1/Fritchii-ZeroStutter/releases/latest).
+2. Extract it into a clean folder (e.g. `D:\Games\Fritchii-6.2.2-ZeroStutter`). Coming from v6.2.x or v6.0? You can copy your old `user` folder over (saves, config, shader cache), or just replace `fritchii.exe` in your v6.2.x folder.
 3. *(Recommended)* Put the two `fork-v54` shader files into `user\cache\shader\0400486024dec000\`.
    For the full ~120k precompiled shaders, also copy the `recipes` folder from the official Fritchii (see [the recipe section](#want-the-full-120k-precompiled-shaders-get-friztis-recipe-from-the-official-fritchii)).
-4. Run **`Play-Fritchii-6.2.1-ZeroStutter.cmd`**.
+4. Run **`Play-Fritchii-6.2.2-ZeroStutter.cmd`**.
 5. Right-click **`FG`** on the status bar (or **Emulation → Configure → Graphics**) to pick **DLSS-G**, **Optical Flow** or **LSFG**.
 
 **Something wrong?** Add the matching off-switch from the table above to `nx2_switches.txt` (one per line, e.g. `EDEN_NX2_STALE_READS=0`), and restart.
@@ -190,6 +222,7 @@ If your CPU has fewer than 8 cores, open `Play-Fritchii-6.2.1-ZeroStutter.cmd` (
 ---
 
 ## 📦 Previous Versions (Preserved Backups)
+- **Fritchii v6.2.1 Zero-Stutter:** [v6.2.1 Release](https://github.com/giangero1/Fritchii-ZeroStutter/releases/tag/v6.2.1-zerostutter) and the [`release/v6.2.1-zerostutter`](https://github.com/giangero1/Fritchii-ZeroStutter/tree/release/v6.2.1-zerostutter) branch.
 - **Fritchii v6.2 Zero-Stutter:** [v6.2 Release](https://github.com/giangero1/Fritchii-ZeroStutter/releases/tag/v6.2-zerostutter) and the [`release/v6.2-zerostutter`](https://github.com/giangero1/Fritchii-ZeroStutter/tree/release/v6.2-zerostutter) branch.
 - **Fritchii v6.0 Zero-Stutter (4K 127 FPS):** [v6.0 Release](https://github.com/giangero1/Fritchii-ZeroStutter/releases/tag/v6.0-zerostutter) and the [`release/v6.0-zerostutter`](https://github.com/giangero1/Fritchii-ZeroStutter/tree/release/v6.0-zerostutter) branch.
 - **Fritchii v5.9.0 Zero-Stutter:** [v5.9.0 Release](https://github.com/giangero1/Fritchii-ZeroStutter/releases/tag/v5.9.0-zerostutter) and the [`release/v5.9.0-zerostutter`](https://github.com/giangero1/Fritchii-ZeroStutter/tree/release/v5.9.0-zerostutter) branch.
