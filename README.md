@@ -45,6 +45,21 @@ Tuned and benchmarked on **AMD Ryzen 7 5800X3D + NVIDIA GeForce RTX 3070 8 GB** 
 
 ![Castle Town Market, RTX 3070 8 GB, 1440p to 4K DLSS](https://raw.githubusercontent.com/giangero1/Fritchii-ZeroStutter/release/v6.2.3-zerostutter/docs/fritchii-6.2.2-rtx3070-4k-market-day.webp)
 
+### 6 GB VRAM Benchmark (RTX 2060 6 GB + i5-8500 at 1440p)
+
+*Tested in Kakariko Village at 1440p:*
+
+| Metric | Upstream v6.2 | Zero-Stutter v6.2.3 |
+| :--- | :---: | :---: |
+| **FPS (1% Low)** | 24 (10 FPS) | **36 (25 FPS)** |
+| **Frame Time** | 42.0 ms | **27.9 ms** |
+| **VRAM Free** | 0.0 GB *(Paging to RAM)* | **0.6 GB Free** |
+| **System RAM Used** | 11.2 GB | **7.4 GB** |
+
+![Kakariko Village on an RTX 2060 6 GB + i5-8500 at 1440p: upstream v6.2 on the left (24 FPS, 0.0 GB VRAM free) vs Zero-Stutter on the right (36 FPS, 0.6 GB VRAM free)](https://raw.githubusercontent.com/giangero1/Fritchii-ZeroStutter/release/v6.2.3-zerostutter/docs/fritchii-6.2-rtx2060-6gb-comparison.webp)
+
+*Upstream completely runs the 6 GB card out of VRAM (0.0 GB free) and spills ~4 GB into system RAM. Zero-Stutter's memory management keeps VRAM below the card's capacity, preventing heavy Windows paging and delivering a smooth, playable experience even on 6 GB GPUs.*
+
 ---
 
 ## 🚀 Quick Start Guide
