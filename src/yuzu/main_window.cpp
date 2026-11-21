@@ -5699,7 +5699,7 @@ void MainWindow::UpdateWindowTitle(std::string_view title_name, std::string_view
     // ZeroStutter: the unofficial fork's own version next to the Fritchii version it is based on,
     // so a screenshot or a bug report shows which build it is.
     static const std::string yuzu_title =
-        fmt::format("{} | {} | Zero-Stutter fork v6.2.2 | {}", std::string{Common::g_build_name},
+        fmt::format("{} | {} | Zero-Stutter fork v6.2.3 | {}", std::string{Common::g_build_name},
                     Common::BuildLabelWithTag(), std::string{Common::g_compiler_id});
 
     const auto override_title =

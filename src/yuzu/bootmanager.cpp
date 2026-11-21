@@ -49,6 +49,8 @@
 #endif
 
 #include "common/build_stamp.h"
+#include "common/nx2_hitch.h"
+#include "common/oot_menu_grace.h"
 #include "common/scm_rev.h"
 #include "common/settings.h"
 #include "common/settings_input.h"
@@ -437,6 +439,16 @@ void GRenderWindow::keyPressEvent(QKeyEvent* event) {
      * capslock, scroll lock.
      */
     if (!event->isAutoRepeat()) {
+        constexpr u64 OcarinaOfTime = 0x0400486024DEC000ULL;
+        if (event->key() == Qt::Key_Escape &&
+            (Common::Nx2Hitch::MenuTraceEnabled() || Common::OotMenuGrace::Enabled()) &&
+            QtCommon::emu_thread &&
+            QtCommon::system->GetApplicationProcessProgramID() == OcarinaOfTime) {
+            Common::Nx2Hitch::MarkMenuTrace("Escape pressed");
+            if (Common::OotMenuGrace::Enabled()) {
+                Common::OotMenuGrace::escape_pressed.store(true, std::memory_order_relaxed);
+            }
+        }
         const auto modifier = QtModifierToSwitchModifier(event->modifiers());
         const auto key = QtKeyToSwitchKey(Qt::Key(event->key()));
         input_subsystem->GetKeyboard()->SetKeyboardModifiers(modifier);

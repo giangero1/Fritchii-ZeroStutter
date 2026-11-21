@@ -1074,8 +1074,47 @@ void RegisterThread(const char* name) {
 #endif
 }
 
+namespace {
+std::atomic<u64> menu_trace_until_ns{};
+}
+
+bool MenuTraceEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("FRITCHII_MENU_TRACE");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
+void MarkMenuTrace(std::string_view menu) {
+    if (!MenuTraceEnabled()) {
+        return;
+    }
+    LOG_INFO(Frontend, "Menu trace marker: {}", menu);
+    menu_trace_until_ns.store(NowNs() + 4'000'000'000ULL, std::memory_order_relaxed);
+}
+
+bool MenuTraceActive() {
+    if (!MenuTraceEnabled()) {
+        return false;
+    }
+    const u64 until = menu_trace_until_ns.load(std::memory_order_relaxed);
+    return until != 0 && NowNs() < until;
+}
+
+bool OotStateTraceEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("FRITCHII_OOT_STATE_TRACE");
+        return value != nullptr && value[0] == '1';
+    }();
+    return enabled;
+}
+
 void OnPresent(long long gap_us) {
     g_hang_last_present_ns.store(NowNs(), std::memory_order_relaxed);
+    if (MenuTraceActive()) {
+        LOG_INFO(Render, "Menu trace: guest present gap {} us", gap_us);
+    }
     g_hang_presents.fetch_add(1, std::memory_order_relaxed);
     [[maybe_unused]] static const bool hang_watch = StartHangWatch();
     static Snapshot last = Take();

@@ -96,7 +96,13 @@ void PrecompileGate::OnLoadComplete() {
     }
     gated_this_boot = true;
     auto* notify = Notify();
-    if (!notify || !notify->PrecompilePending()) {
+    if (!notify) {
+        return;
+    }
+    if (!notify->PrecompilePending()) {
+        if (notify->PrecompileSourceMissing()) {
+            hooks.missing_shader_setup();
+        }
         return;
     }
     // Hold the game while the preparation decides; a quick "already prepared" lets it go at once.
@@ -129,6 +135,9 @@ void PrecompileGate::Poll() {
             phase = Phase::Off;
             timer->stop();
             hooks.resume();
+            if (notify->PrecompileSourceMissing()) {
+                hooks.missing_shader_setup();
+            }
         } else if (counting || since_check.elapsed() > QuietCheckMs) {
             ShowScreen();
             UpdateScreen(progress.done, progress.total);
@@ -140,6 +149,9 @@ void PrecompileGate::Poll() {
             phase = Phase::Off;
             timer->stop();
             hooks.resume();
+            if (notify->PrecompileSourceMissing()) {
+                hooks.missing_shader_setup();
+            }
         } else {
             UpdateScreen(progress.done, progress.total);
         }

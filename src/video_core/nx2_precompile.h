@@ -76,6 +76,7 @@ struct Recipe {
 /// about the file's size in memory while it assembles: call it off the UI and GPU threads.
 [[nodiscard]] std::filesystem::path EnsurePrecompiledFile(u64 title_id,
                                                           const std::filesystem::path& title_dir,
-                                                          u32 cache_version, std::stop_token stop);
+                                                          u32 cache_version, std::stop_token stop,
+                                                          bool& missing_source);
 
 } // namespace VideoCommon::Nx2Precompile

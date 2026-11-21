@@ -356,6 +356,7 @@ public:
         return true;
     }
 
+    [[nodiscard]] bool PrepareAstcTranscodeUpload(Image& image, size_t staging_bytes);
     void AccelerateImageUpload(Image&, const StagingBufferRef&,
                                std::span<const VideoCommon::SwizzleParameters>,
                                u32 z_start, u32 z_count);
@@ -474,6 +475,7 @@ public:
 
     /// ASTC decoded on the GPU and re-compressed to BC1/BC3 there (accelerate_astc=Gpu with
     /// astc_recompression=Bc1/Bc3): decode into a temporary RGBA8 image, encode, copy.
+    [[nodiscard]] bool AdmitAstcTranscode(Image& image, size_t avoided_staging_bytes);
     void TranscodeAstcToBcn(Image& image, const StagingBufferRef& map,
                             std::span<const VideoCommon::SwizzleParameters> swizzles);
 
@@ -493,6 +495,8 @@ public:
     std::vector<PendingTranscode> free_transcodes;
     /// FRITCHII_ASTC_SCRATCH_CAP_MIB: textures deferred since a decode last finished.
     u32 astc_deferrals_in_a_row{};
+    u32 astc_trace_deferrals{};
+    u64 astc_trace_avoided_staging_bytes{};
 
     /// FRITCHII_VRAM_DEFRAG: the open defragmentation pass (null: none).
     VmaDefragmentationContext defrag_context{};

@@ -51,6 +51,7 @@
 #include "video_core/churn_counters.h"
 #include "video_core/nx2_profile.h"
 #include "common/nx2_hitch.h"
+#include "common/oot_menu_grace.h"
 #include "shader_recompiler/shader_info.h"
 #include "video_core/nx2_report_census.h"
 #include "video_core/one_follower_hooks.h"
@@ -62,6 +63,14 @@ namespace VideoCommon {
 /// EDEN_NATIVE_DRAW_DIAGNOSTICS is read once: getenv scans the whole environment block on Windows.
 [[nodiscard]] inline bool NativeDrawDiagnostics() {
     static const bool enabled = std::getenv("EDEN_NATIVE_DRAW_DIAGNOSTICS") != nullptr;
+    return enabled;
+}
+
+[[nodiscard]] inline bool WallClockTextureAgeEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("FRITCHII_VRAM_WALL_CLOCK_AGE");
+        return value != nullptr && value[0] == '1';
+    }();
     return enabled;
 }
 
@@ -169,12 +178,111 @@ TextureCache<P>::TextureCache(Runtime& runtime_, Tegra::MaxwellDeviceMemoryManag
 }
 
 template <class P>
+bool TextureCache<P>::MenuGraceCanWait(std::chrono::steady_clock::time_point now) const {
+    if (!Common::OotMenuGrace::Enabled() || !VideoCore::SmallCard::Active() ||
+        !Common::OotMenuGrace::Active(now) || budget_seen.mode <= 0 ||
+        load_guard_count == 0 || budget_seen.budget <= budget_seen.headroom) {
+        return false;
+    }
+    if (now - load_guard_sample_time > std::chrono::milliseconds{150}) {
+        return false;
+    }
+    const size_t newest = (load_guard_next + load_guard_samples.size() - 1) %
+                          load_guard_samples.size();
+    return load_guard_samples[newest] <= budget_seen.budget - budget_seen.headroom;
+}
+
+template <class P>
 void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
+    const auto now = std::chrono::steady_clock::now();
+    if (!out_of_memory && MenuGraceCanWait(now)) {
+        if (frame_tick % 30 == 0 && Common::Nx2Hitch::MenuTraceActive()) {
+            const size_t newest = (load_guard_next + load_guard_samples.size() - 1) %
+                                  load_guard_samples.size();
+            LOG_INFO(HW_GPU, "Menu trace: deferred background texture eviction with {} MiB "
+                             "of driver headroom",
+                     (budget_seen.budget - load_guard_samples[newest]) >> 20);
+        }
+        return;
+    }
+    static const bool pace_menu_reclaim = [] {
+        const char* value = std::getenv("FRITCHII_VRAM_PACE_MENU_RECLAIM");
+        return value != nullptr && value[0] == '1';
+    }();
+    const bool pace_reclaim = [&] {
+        if (!pace_menu_reclaim || out_of_memory || !budget_pressure ||
+            !VideoCore::SmallCard::Active() || budget_seen.mode <= 0 ||
+            load_guard_count < 2 || load_guard_driver_budget == 0) {
+            return false;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (!Common::OotMenuGrace::Active(now) ||
+            now - load_guard_sample_time > std::chrono::milliseconds{150}) {
+            return false;
+        }
+        const auto usage_ago = [this](size_t samples) {
+            const size_t size = load_guard_samples.size();
+            return load_guard_samples[(load_guard_next + size - 1 - samples) % size];
+        };
+        const u64 budget = (std::min)(budget_seen.budget, load_guard_driver_budget);
+        const u64 usage = usage_ago(0);
+        constexpr u64 EmergencyHeadroom = 512_MiB;
+        if (usage >= budget || budget - usage < EmergencyHeadroom ||
+            usage > usage_ago(1) + 64_MiB) {
+            return false;
+        }
+        u64 recent_peak = usage;
+        for (size_t i = 1; i < (std::min)(load_guard_count, size_t{4}); ++i) {
+            recent_peak = (std::max)(recent_peak, usage_ago(i));
+        }
+        if (recent_peak - usage < 128_MiB) {
+            return false;
+        }
+
+        // Reclaim was already reducing pressure. Allow at most one small batch per driver
+        // sample while the player can still return to these textures. The load drain, trim,
+        // and pre-allocation path are independent and retain their usual budget checks.
+        if (menu_reclaim_sample != load_guard_sample_time) {
+            menu_reclaim_sample = load_guard_sample_time;
+            const u64 headroom = budget - usage;
+            const u64 shortfall = budget_seen.headroom - (std::min)(budget_seen.headroom, headroom);
+            menu_reclaim_bytes = (std::min)(shortfall, u64{128_MiB});
+            if (Common::Nx2Hitch::MenuTraceActive()) {
+                LOG_INFO(HW_GPU, "Menu trace: background reclaim paced at {} MiB for this sample "
+                                 "with {} MiB headroom, usage down {} MiB",
+                         menu_reclaim_bytes >> 20, headroom >> 20, (recent_peak - usage) >> 20);
+            }
+        }
+        return true;
+    }();
+    if (pace_reclaim && menu_reclaim_bytes == 0) {
+        return;
+    }
     const Common::WriteRing::SiteScope write_site{"texture download (garbage collector)", true};
     const DeleteReasonScope delete_reason_scope{*this, DeleteReason::GarbageCollect};
     bool high_priority_mode = false;
     bool aggressive_mode = false;
     bool evict_old_costly = false;
+    // Keep recent, clean, costly uploads through a pressure spike while the driver still has
+    // room. The load drain, pre-allocation eviction, and allocation-failure retry are separate.
+    static const bool keep_costly_on_recovery = [] {
+        const char* value = std::getenv("FRITCHII_VRAM_KEEP_RECENT_COSTLY");
+        return value != nullptr && value[0] == '1';
+    }();
+    const bool keep_recent_costly = [&] {
+        if (!keep_costly_on_recovery || out_of_memory || !budget_pressure ||
+            !VideoCore::SmallCard::Active() || load_guard_count == 0 || budget_seen.budget == 0 ||
+            std::chrono::steady_clock::now() - load_guard_sample_time >
+                std::chrono::milliseconds{150}) {
+            return false;
+        }
+        const size_t newest = (load_guard_next + load_guard_samples.size() - 1) %
+                              load_guard_samples.size();
+        constexpr u64 reserve = 768_MiB;
+        return budget_seen.budget > reserve &&
+               load_guard_samples[newest] <= budget_seen.budget - reserve;
+    }();
+    u32 kept_costly{};
     u64 ticks_to_destroy = 0;
     size_t num_iterations = 0;
     const auto Configure = [&](bool allow_aggressive) {
@@ -217,7 +325,7 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
         // FRITCHII_TC_THRASH_GUARD: images the game keeps coming back to stay, however far past
         // critical the cache is. An allocation that failed needs the memory now.
         if (!out_of_memory) {
-            ticks_to_destroy = (std::max)(ticks_to_destroy, thrash_floor);
+            ticks_to_destroy = (std::max)({ticks_to_destroy, thrash_floor, texture_age_floor_frames});
         }
     };
     // FRITCHII_TC_COLLECT_EVICTABLE (live, default 0; zortos #1731): images this pass may not
@@ -227,9 +335,19 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
     const bool skip_kept = VideoCore::Nx2Debug::SwitchValue(
                                VideoCore::Nx2Debug::g_tc_collect_evictable,
                                "FRITCHII_TC_COLLECT_EVICTABLE") != 0;
-    const auto CanEvict = [this, &high_priority_mode, &aggressive_mode,
-                           &evict_old_costly](const Image& image, bool& must_download) {
+    const auto CanEvict = [this, &high_priority_mode, &aggressive_mode, &evict_old_costly,
+                           &kept_costly, keep_recent_costly](const Image& image,
+                                                            bool& must_download) {
         if (True(image.flags & ImageFlagBits::IsDecoding)) {
+            return false;
+        }
+        // last_use_tick is saved when an image leaves the LRU. Live images use the LRU tick.
+        constexpr u64 RecentFrames = 600;
+        if (keep_recent_costly && aggressive_mode && True(image.flags & ImageFlagBits::CostlyLoad) &&
+            False(image.flags & (ImageFlagBits::GpuModified | ImageFlagBits::CpuModified |
+                                 ImageFlagBits::BadOverlap)) &&
+            frame_tick - lru_cache.Tick(image.lru_index) <= RecentFrames) {
+            ++kept_costly;
             return false;
         }
         must_download = IsDownloadable(image) && False(image.flags & ImageFlagBits::BadOverlap);
@@ -241,8 +359,8 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
                                 VideoCore::Nx2Debug::g_covered_retire,
                                 "FRITCHII_COVERED_RETIRE") > 0;
     const auto Cleanup = [this, &num_iterations, &high_priority_mode, &aggressive_mode,
-                          &CanEvict, skip_kept, out_of_memory, covered_on](ImageId image_id) {
-        if (num_iterations == 0) {
+                          &CanEvict, skip_kept, out_of_memory, covered_on, pace_reclaim](ImageId image_id) {
+        if (num_iterations == 0 || (pace_reclaim && menu_reclaim_bytes == 0)) {
             return true;
         }
         auto& image = slot_images[image_id];
@@ -259,6 +377,14 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
         } else {
             --num_iterations;
             if (!CanEvict(image, must_download)) {
+                return false;
+            }
+        }
+        u64 reclaim_bytes{};
+        if (pace_reclaim) {
+            const u64 scaled_bytes = image.HasScaled() ? GetScaledImageSizeBytes(image) : 0;
+            reclaim_bytes = ImageMemoryBytes(image) + scaled_bytes;
+            if (reclaim_bytes > menu_reclaim_bytes) {
                 return false;
             }
         }
@@ -350,6 +476,9 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
             UnregisterImage(image_id);
             DeleteImage(image_id, image.scale_tick > frame_tick + 5);
         }
+        if (pace_reclaim) {
+            menu_reclaim_bytes -= reclaim_bytes;
+        }
         if (out_of_memory) {
             return false;
         }
@@ -369,6 +498,9 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
     // emptiest blocks go first, so blocks drain and go back to the driver; placement already
     // prefers the fullest blocks (best fit). Images with memory of their own sit in the middle.
     const auto Collect = [&](u64 age) {
+        if (pace_reclaim && menu_reclaim_bytes == 0) {
+            return;
+        }
         if constexpr (requires(const Image& image) { image.MemoryBlock(); }) {
             std::vector<ImageId> candidates;
             const size_t limit = num_iterations * 8;
@@ -428,20 +560,54 @@ void TextureCache<P>::RunGarbageCollector(bool out_of_memory) {
         return value != nullptr ? std::strtoull(value, nullptr, 10) : 1800ULL;
     }();
     if (high_priority_mode && old_age != 0 && frame_tick > old_age) {
-        evict_old_costly = true;
-        if (skip_kept) {
-            // FRITCHII_TC_COLLECT_EVICTABLE: old costly images by block fill too, so their
-            // deletes empty blocks as the other passes' do.
-            Collect(old_age);
+        static const bool keep_idle_costly = [] {
+            const char* value = std::getenv("FRITCHII_VRAM_KEEP_IDLE_COSTLY");
+            return value != nullptr && value[0] == '1';
+        }();
+        // A long pause can age the entire scene past old_age while the live heap has room.
+        // The adaptive expected threshold can trigger this optional pass below the driver's
+        // target. Leave it available during area cleanup, when past critical, or if headroom
+        // is gone. The normal collector and its allocation-failure path still run.
+        const bool defer_old_pass = [&] {
+            if (!keep_idle_costly || !VideoCore::SmallCard::Active() || out_of_memory ||
+                area_clean_active || total_used_memory >= critical_memory || load_guard_count == 0 ||
+                budget_seen.mode <= 0) {
+                return false;
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if (now < load_guard_until ||
+                now - load_guard_sample_time > std::chrono::milliseconds{150}) {
+                return false;
+            }
+            const size_t newest = (load_guard_next + load_guard_samples.size() - 1) %
+                                  load_guard_samples.size();
+            return budget_seen.budget > budget_seen.headroom &&
+                   load_guard_samples[newest] <= budget_seen.budget - budget_seen.headroom;
+        }();
+        if (defer_old_pass) {
+            if (frame_tick % 600 == 0) {
+                LOG_INFO(HW_GPU, "VRAM idle texture retention: optional old-image pass deferred");
+            }
         } else {
-            lru_cache.ForEachItemBelow(frame_tick - old_age, Cleanup);
+            evict_old_costly = true;
+            if (skip_kept) {
+                // FRITCHII_TC_COLLECT_EVICTABLE: old costly images by block fill too, so their
+                // deletes empty blocks as the other passes' do.
+                Collect(old_age);
+            } else {
+                lru_cache.ForEachItemBelow(frame_tick - old_age, Cleanup);
+            }
+            evict_old_costly = false;
         }
-        evict_old_costly = false;
     }
     Collect(ticks_to_destroy);
     if (out_of_memory || total_used_memory >= critical_memory) {
         Configure(true);
         Collect(ticks_to_destroy);
+    }
+    if (kept_costly != 0 && Common::Nx2Hitch::MenuTraceActive()) {
+        LOG_INFO(HW_GPU, "Menu trace: collector skipped {} recent costly texture candidates",
+                 kept_costly);
     }
 }
 
@@ -925,16 +1091,16 @@ void TextureCache<P>::NoteLostContents(ImageBase& image, bool is_modification, b
     ++((bits & LostDrawn) != 0 ? s.sampled_drawn : s.sampled_undrawn);
     s.sampled_bytes += image.guest_size_bytes;
     const StaleDrop* const drop = FindStaleDrop(image.cpu_addr, image.guest_size_bytes);
-    const size_t reason = drop == nullptr                         ? 9
-                          : drop->reason == LostReasonRelocate     ? 8
-                          : (std::min<size_t>)(drop->reason, 7);
+    const size_t reason = drop == nullptr                         ? 10
+                          : drop->reason == LostReasonRelocate     ? 9
+                          : (std::min<size_t>)(drop->reason, 8);
     ++s.sampled_by_reason[reason];
     if (drop != nullptr && (drop->guard & (GuardSampled | GuardLoaded)) != 0) {
         ++s.sampled_guarded;
     }
     // A relocation moved the image away while its old address was still read: that shape and
     // address never relocate again (as the sampled guard does when it sees the read in time).
-    if (drop != nullptr && reason == 8 &&
+    if (drop != nullptr && reason == 9 &&
         VideoCore::Nx2Debug::SwitchValue(VideoCore::Nx2Debug::g_lost_writeback,
                                          "FRITCHII_LOST_WRITEBACK", 1024) > 0) {
         relocation_guarded_addresses[drop->gpu_addr] |= GuardSampled;
@@ -950,7 +1116,7 @@ void TextureCache<P>::NoteLostContents(ImageBase& image, bool is_modification, b
     ++s.sampled_by_why[why];
     // FRITCHII_LOST_KEEP: this memory is read after going cold; the next drop over it is written
     // back whatever its size (relocation has its guards instead).
-    if (reason != 8 && VideoCore::Nx2Debug::SwitchValue(VideoCore::Nx2Debug::g_lost_keep,
+    if (reason != 9 && VideoCore::Nx2Debug::SwitchValue(VideoCore::Nx2Debug::g_lost_keep,
                                                         "FRITCHII_LOST_KEEP", 1) > 0) {
         LearnLostRead(image.cpu_addr, image.guest_size_bytes);
     }
@@ -959,9 +1125,9 @@ void TextureCache<P>::NoteLostContents(ImageBase& image, bool is_modification, b
     if (s.logged < 40 || s.window_logged < 2) {
         ++s.logged;
         ++s.window_logged;
-        static constexpr std::array<const char*, 10> names{
+        static constexpr std::array<const char*, 11> names{
             "other",       "garbage collect", "cold sweep",       "unmap",      "join",
-            "slot retire", "unmap sweep",     "superseded sweep", "relocation", "not recorded"};
+            "slot retire", "unmap sweep",     "superseded sweep", "covered retire", "relocation", "not recorded"};
         static constexpr std::array<const char*, LostWhyCount> whys{
             "no write-back on that path", "over the size cap", "refused (newer write-back)",
             "not downloadable", "write-back off", "over the keep budget", "refused at landing"};
@@ -1091,7 +1257,7 @@ void TextureCache<P>::LogLostContents() {
                  "cleared to zero), {} uploaded stale guest bytes; {} overwritten whole first; "
                  "SAMPLED with lost contents: {} ({} not drawn into, {} drawn over; {} KiB; {} "
                  "were read in a later frame before the drop) by drop: collector {}, cold sweep "
-                 "{}, superseded sweep {}, slot retire {}, join {}, relocation {}, unmap {}/{}, "
+                 "{}, covered retire {}, superseded sweep {}, slot retire {}, join {}, relocation {}, unmap {}/{}, "
                  "other {}, not recorded {}; relocation guards {}; write-backs queued/landed: {}",
                  VideoCore::Nx2Debug::SwitchValue(VideoCore::Nx2Debug::g_stale_zero,
                                                   "FRITCHII_STALE_ZERO", 1),
@@ -1099,7 +1265,7 @@ void TextureCache<P>::LogLostContents() {
                                                   "FRITCHII_LOST_WRITEBACK", 1024),
                  s.made_skipped, s.made_zeroed, s.made_uploaded, s.overwritten, sampled,
                  s.sampled_undrawn, s.sampled_drawn, s.sampled_bytes >> 10, s.sampled_guarded,
-                 r[1], r[2], r[7], r[5], r[4], r[8], r[3], r[6], r[0], r[9], s.relocation_guards,
+                 r[1], r[2], r[8], r[7], r[5], r[4], r[9], r[3], r[6], r[0], r[10], s.relocation_guards,
                  wb);
     }
     const u64 last = s.last_log_ns;
@@ -1364,10 +1530,12 @@ void TextureCache<P>::BudgetControl() {
         bool surge_now = false;
         if (guard_on && now - load_guard_sample_time >= std::chrono::milliseconds{100}) {
             load_guard_sample_time = now;
+            load_guard_driver_budget = 0;
             u64 g_size{};
             u64 g_usage{};
             u64 g_budget{};
             if (runtime.MainHeapNumbers(g_size, g_usage, g_budget) && g_budget != 0) {
+                load_guard_driver_budget = g_budget;
                 u64 lowest = g_usage;
                 for (size_t i = 0; i < load_guard_count; ++i) {
                     lowest = (std::min)(lowest, load_guard_samples[i]);
@@ -1502,11 +1670,22 @@ void TextureCache<P>::BudgetControl() {
         }
         const bool was_pressure = budget_pressure;
         const u64 old_cap = budget_cap;
+        static const bool track_cap = [] {
+            const char* value = std::getenv("FRITCHII_VRAM_TRACK_CAP");
+            return value != nullptr && value[0] == '1';
+        }();
+        // In an area surge, several samples can count the same shortfall while frees are
+        // still in flight. With at least 1 GiB below the effective budget, base the cap on the
+        // current adjusted usage and the current target. Near the budget the original
+        // tightening applies. The surge target and area cleanup still run on every load.
+        const bool track_current_usage = track_cap && VideoCore::SmallCard::Active() &&
+                                         usage < budget && budget - usage >= 1_GiB;
         if (mode == 0) {
             budget_cap = ~0ULL;
         } else if (usage > target) {
             const u64 over = usage - target;
-            const u64 from = (std::min)(budget_cap, total_used_memory);
+            const u64 from = track_current_usage ? total_used_memory
+                                                 : (std::min)(budget_cap, total_used_memory);
             // ZeroStutter v6.2.2: with the small card profile on, the cap may go down to a
             // quarter of the budget. On an 8 GB RTX 3070 at 1440p -> 4K DLSS, OoT's market keeps
             // ~3 GB of images while buffers and the driver hold ~3 more: half the budget
@@ -1517,9 +1696,29 @@ void TextureCache<P>::BudgetControl() {
             budget_cap = (std::max)(from - (std::min)(from, (std::min)(over, u64{1_GiB})),
                                     cap_floor);
         } else if (budget_cap != ~0ULL) {
-            // A dead band of half the headroom, so the cap does not chase the usage up and down.
             const u64 room = target - usage;
-            if (room > headroom / 2) {
+            static const bool recover_cap = [] {
+                const char* value = std::getenv("FRITCHII_VRAM_RECOVER_CAP");
+                return value != nullptr && value[0] == '1';
+            }();
+            // Several pressure samples can ratchet the cap down faster than allocations retire.
+            // Once there is room again, rebase it on the adjusted collector usage plus the
+            // measured room below the same target. Do not lift it during the load reserve.
+            if (track_current_usage) {
+                budget_cap = (std::min)(base_critical_memory, total_used_memory + room);
+            } else if (recover_cap && VideoCore::SmallCard::Active() && !surge &&
+                       room >= 256_MiB) {
+                const u64 recovered_cap = (std::min)(base_critical_memory, total_used_memory + room);
+                if (recovered_cap > budget_cap) {
+                    LOG_INFO(HW_GPU,
+                             "VRAM cap recovery: {} to {} MiB with {} MiB below target "
+                             "(driver use {} MiB, effective budget {} MiB)",
+                             budget_cap >> 20, recovered_cap >> 20, room >> 20, usage >> 20,
+                             budget >> 20);
+                    budget_cap = recovered_cap;
+                }
+            } else if (room > headroom / 2) {
+                // The original dead band keeps the cap from chasing small changes in usage.
                 budget_cap += (std::min)(room - headroom / 2, u64{256_MiB});
             }
         }
@@ -1573,15 +1772,60 @@ void TextureCache<P>::EnforceCriticalAtCreate(u64 incoming) {
     // every caller of InsertImage looks up again or gives up the operation).
     const int enforce = VideoCore::Nx2Debug::SwitchValue(
         VideoCore::Nx2Debug::g_tc_critical_enforce, "FRITCHII_TC_CRITICAL_ENFORCE", 1);
-    if (enforce <= 0 || (enforce == 1 && !budget_pressure) ||
-        total_used_memory + incoming <= critical_memory) [[likely]] {
+    if (enforce <= 0 || (enforce == 1 && !budget_pressure)) {
+        return;
+    }
+    const bool past_critical = total_used_memory + incoming > critical_memory;
+    if constexpr (requires(u64& n) { runtime.MainHeapNumbers(n, n, n); runtime.FailedImages(); }) {
+        static const bool use_physical_budget = [] {
+            const char* value = std::getenv("FRITCHII_VRAM_PRECREATE_PHYSICAL");
+            return value != nullptr && value[0] == '1';
+        }();
+        if (use_physical_budget && budget_pressure && VideoCore::SmallCard::Active() &&
+            budget_seen.mode > 0 && runtime.FailedImages() == seen_failed_images) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= load_guard_until) {
+                // The soft cache cap can still be low after a surge has passed. Budget from
+                // the measured heap here, including every proposed create since the sample.
+                // No credit for frees until a new driver sample reflects them.
+                auto& sample = create_budget_sample;
+                if (now - sample.time >= std::chrono::milliseconds{25}) {
+                    sample.time = now;
+                    sample.budget = 0;
+                    u64 size{};
+                    u64 usage{};
+                    u64 driver_budget{};
+                    if (runtime.MainHeapNumbers(size, usage, driver_budget)) {
+                        sample.budget = budget_seen.os_budget == 0
+                                            ? driver_budget
+                                            : (std::min)(driver_budget, budget_seen.os_budget);
+                        sample.projected_usage = usage;
+                    }
+                }
+                if (sample.budget > budget_seen.headroom) {
+                    const u64 target = sample.budget - budget_seen.headroom;
+                    if (sample.projected_usage <= target && incoming <= target - sample.projected_usage) {
+                        sample.projected_usage += incoming;
+                        create_enforce_stats.within_budget += past_critical ? 1 : 0;
+                        return;
+                    }
+                    sample.projected_usage = sample.budget;
+                }
+            }
+        }
+    }
+    if (!past_critical) [[likely]] {
         return;
     }
     static const u64 min_age = [] {
         const char* value = std::getenv("EDEN_NX2_TC_MIN_AGE");
         return value != nullptr ? std::strtoull(value, nullptr, 10) : 0ULL;
     }();
-    const u64 idle_frames = (std::max)({u64{10}, min_age, thrash_floor});
+    const auto now = std::chrono::steady_clock::now();
+    const bool menu_grace_active = MenuGraceCanWait(now);
+    const u64 idle_frames = (std::max)({u64{10}, min_age, thrash_floor,
+                                        menu_grace_active ? texture_age_floor_frames : 0ULL,
+                                        menu_grace_active ? u64{60} : 0ULL});
     constexpr u32 MaxPerFrame = 256;
     constexpr size_t MaxPerPass = 32;
     constexpr size_t MaxLooked = 512;
@@ -1633,7 +1877,8 @@ void TextureCache<P>::EnforceCriticalAtCreate(u64 incoming) {
     if (candidates.empty() && looked < MaxLooked) {
         create_enforce_empty_frame = frame_tick;
     }
-    const DeleteReasonScope delete_reason_scope{*this, DeleteReason::GarbageCollect};
+    const DeleteReasonScope delete_reason_scope{*this, DeleteReason::GarbageCollect,
+                                                VramEviction::BeforeAllocation};
     for (const ImageId image_id : candidates) {
         if (total_used_memory + incoming <= critical_memory ||
             create_enforce_frame_deletes >= MaxPerFrame) {
@@ -1695,9 +1940,10 @@ void TextureCache<P>::DrainSparseBlocks() {
             // yet (at ~9 fps that is 3+ s), so this pass found 35 MiB and the game ran at ~9 fps
             // for 18 s. Images in use are drawn every frame, so 15 idle frames is still past them.
             const u64 clean_idle = VideoCore::SmallCard::Active() ? u64{15} : u64{30};
-            const u64 idle = area_clean
-                                 ? clean_idle
-                                 : (std::max)(u64{30}, (std::min)(thrash_floor, u64{120}));
+            const bool menu_grace_active = MenuGraceCanWait(now);
+            const u64 idle = menu_grace_active
+                                 ? (std::max)({u64{60}, texture_age_floor_frames})
+                                 : (area_clean ? clean_idle : (std::max)(u64{30}, (std::min)(thrash_floor, u64{120})));
             std::array<ImageId, NUM_RT + 1> surge_bound{};
             const auto surge_bound_image = [this](ImageViewId view_id) {
                 return view_id != NULL_IMAGE_VIEW_ID && view_id != ImageViewId{}
@@ -1727,7 +1973,8 @@ void TextureCache<P>::DrainSparseBlocks() {
                 });
             }
             if (!victims.empty()) {
-                const DeleteReasonScope surge_reason{*this, DeleteReason::GarbageCollect};
+                const DeleteReasonScope surge_reason{*this, DeleteReason::GarbageCollect,
+                                                    VramEviction::LoadSurge};
                 for (const ImageId image_id : victims) {
                     auto& image = slot_images[image_id];
                     MarkStale(image); // before UntrackImage (see MarkStale)
@@ -1799,7 +2046,15 @@ void TextureCache<P>::DrainSparseBlocks() {
                 False(image->flags & (ImageFlagBits::IsDecoding | ImageFlagBits::CollectPending |
                                       ImageFlagBits::GpuModified | ImageFlagBits::BadOverlap)) &&
                 !IsDownloadable(*image);
-            const bool old = frame_tick > idle && image->last_use_tick + idle < frame_tick;
+            bool old = frame_tick > idle;
+            if (old && texture_age_floor_frames != 0) {
+                // last_use_tick is saved during UnregisterImage. Use the live age when the
+                // driver has headroom, and leave the pressure drain in place near the budget.
+                old = True(image->flags & ImageFlagBits::Registered) &&
+                      lru_cache.Tick(image->lru_index) < frame_tick - idle;
+            } else if (old) {
+                old = image->last_use_tick + idle < frame_tick;
+            }
             if (!clean || !old || std::ranges::find(bound, image_id) != bound.end()) {
                 block.drainable = false;
                 block.images.clear();
@@ -1826,7 +2081,8 @@ void TextureCache<P>::DrainSparseBlocks() {
         u64 reclaimed{};
         u64 freed_images{};
         u64 blocks_done{};
-        const DeleteReasonScope delete_reason_scope{*this, DeleteReason::GarbageCollect};
+        const DeleteReasonScope delete_reason_scope{*this, DeleteReason::GarbageCollect,
+                                                    VramEviction::SparseBlock};
         for (const auto& [fill, key] : order) {
             const Block& block = blocks[key];
             if (deleted + block.images.size() > MaxImagesPerPass ||
@@ -1982,32 +2238,63 @@ void TextureCache<P>::NoteThrashDelete(const Image& image) {
         .gpu_addr = image.gpu_addr,
         .shape = shape,
         .last_use = image.last_use_tick,
+        .evicted_frame = frame_tick,
         .kib = static_cast<u32>(ImageMemoryBytes(image) >> 10),
         .cause = static_cast<u8>(pressured ? ThrashCausePressured
                                            : static_cast<size_t>(delete_reason)),
         .costly = True(image.flags & ImageFlagBits::CostlyLoad),
+        .eviction = vram_eviction,
     };
 }
 
 template <class P>
-void TextureCache<P>::NoteThrashMade(const ImageInfo& info, GPUVAddr gpu_addr) {
+bool TextureCache<P>::NoteThrashMade(const ImageInfo& info, GPUVAddr gpu_addr) {
     ++thrash_stats.made;
     if (thrash_ghosts.empty()) {
-        return;
+        return false;
     }
     const u64 shape = RelocationShapeKey(info);
     ThrashGhost& ghost = thrash_ghosts[ThrashSlot(gpu_addr, shape)];
     if (ghost.gpu_addr != gpu_addr || ghost.shape != shape) {
-        return;
+        return false;
     }
     const u64 interval = frame_tick - (std::min)(frame_tick, ghost.last_use);
     const size_t cause = ghost.cause;
     const bool costly = ghost.costly;
     const u32 kib = ghost.kib;
+    const auto eviction = ghost.eviction;
+    const u64 last_use = ghost.last_use;
+    const u64 evicted_frame = ghost.evicted_frame;
     ghost = ThrashGhost{};
+    // Keep long-idle re-creations in the menu trace as well.
+    const bool state_trace = Common::Nx2Hitch::OotStateTraceEnabled();
+    if (state_trace || Common::Nx2Hitch::MenuTraceActive()) {
+        ++menu_texture_trace.remade[cause];
+        ++menu_texture_trace.vram_remade[static_cast<size_t>(eviction)];
+        menu_texture_trace.remake_kib += kib;
+    }
+    bool watch_prepare = false;
+    if (state_trace && (cause == ThrashCausePressured || eviction != VramEviction::None ||
+                        cause == static_cast<size_t>(DeleteReason::ColdSweep) ||
+                        cause == static_cast<size_t>(DeleteReason::CoveredRetire))) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= menu_texture_details_until) {
+            menu_texture_details_until = now + std::chrono::seconds{1};
+            menu_texture_details = 0;
+        }
+        if (menu_texture_details < 12) {
+            ++menu_texture_details;
+            watch_prepare = true;
+            LOG_INFO(HW_GPU,
+                     "OoT texture re-create: image {:#x}/{:#x} ({}x{}, {} KiB), "
+                     "last use frame {}, evicted frame {}, request frame {}, cause {}, eviction {}",
+                     gpu_addr, shape, info.size.width, info.size.height, kib, last_use,
+                     evicted_frame, frame_tick, cause, static_cast<unsigned>(eviction));
+        }
+    }
     // Back after half a minute or more is a scene coming back, not a loop.
     if (interval > 1800) {
-        return;
+        return watch_prepare;
     }
     auto& stats = thrash_stats;
     ++stats.remade[cause];
@@ -2021,6 +2308,7 @@ void TextureCache<P>::NoteThrashMade(const ImageInfo& info, GPUVAddr gpu_addr) {
         }
         ++thrash_window[bucket];
     }
+    return watch_prepare;
 }
 
 template <class P>
@@ -2123,14 +2411,14 @@ void TextureCache<P>::TickThrashGuard() {
                  "Image churn (FRITCHII_TC_THRASH_GUARD={}) last 600 frames: {} images made, {} "
                  "made again after a delete ({} MiB, {} costly to load, {:.1f} frames after their "
                  "last use); deleted by: collector under pressure {}, collector {}, cold sweep "
-                 "{}, superseded sweep {}, slot retire {}, join {}, unmap {}, unmap sweep {}, "
+                 "{}, covered retire {}, superseded sweep {}, slot retire {}, join {}, unmap {}, unmap sweep {}, "
                  "other {}; collector age floor {} frames (raised {} times, halved {} times at "
                  "3/4 of the budget), live images {} MiB",
                  mode, s.made, remade, s.remade_kib >> 10, s.remade_costly,
                  remade != 0 ? static_cast<double>(s.interval_sum) / static_cast<double>(remade)
                              : 0.0,
                  s.remade[ThrashCausePressured], at(DeleteReason::GarbageCollect),
-                 at(DeleteReason::ColdSweep), at(DeleteReason::SupersededSweep),
+                 at(DeleteReason::ColdSweep), at(DeleteReason::CoveredRetire), at(DeleteReason::SupersededSweep),
                  at(DeleteReason::SlotRetire), at(DeleteReason::Join), at(DeleteReason::Unmap),
                  at(DeleteReason::UnmapSweep), at(DeleteReason::Other), thrash_floor, s.raised,
                  s.capped, thrash_image_bytes >> 20);
@@ -2183,7 +2471,8 @@ void TextureCache<P>::LogVramOwners() {
                  "(0 fixed, 1 vk, 2 os), budget {} MiB (vk {} MiB, os {} MiB, other processes {} "
                  "MiB), headroom {} MiB, last {} s: peak usage {} MiB, lowest budget {} MiB, {} s "
                  "over budget less headroom, {} s over the budget; evictions before creates {} "
-                 "passes, {} images, {} MiB, {} short, {} at the frame cap",
+                 "passes, {} images, {} MiB, {} short, {} at the frame cap, {} creates kept "
+                 "within the normal driver reserve",
                  runtime.VramOwnersText(image_bytes, deleted), images, gpu_written_bytes >> 20,
                  unbacked, total_used_memory >> 20, expected_memory >> 20, critical_memory >> 20,
                  base_critical_memory >> 20, budget_pressure ? ", budget cap on" : "",
@@ -2191,7 +2480,7 @@ void TextureCache<P>::LogVramOwners() {
                  seen.others >> 20, seen.headroom >> 20, seconds, seen.peak_usage >> 20,
                  seen.lowest_budget == ~0ULL ? 0 : seen.lowest_budget >> 20, seen.over_seconds,
                  seen.spill_seconds, enforce.passes, enforce.deleted, enforce.freed >> 20,
-                 enforce.short_of, enforce.capped);
+                 enforce.short_of, enforce.capped, enforce.within_budget);
         seen.peak_usage = 0;
         seen.lowest_budget = ~0ULL;
         seen.over_seconds = 0;
@@ -2442,6 +2731,28 @@ void TextureCache<P>::TickFrame() {
     // FRITCHII_VRAM_BUDGET_MODE / FRITCHII_VRAM_OWNERS: once a second / every 10 s, with the
     // usage just read (the collector below already sees a moved cap).
     BudgetControl();
+    if (WallClockTextureAgeEnabled() && VideoCore::SmallCard::Active()) {
+        const auto now = std::chrono::steady_clock::now();
+        constexpr auto MinTextureAge = std::chrono::milliseconds{750};
+        constexpr size_t MaxRecentFrames = 600;
+        const auto cutoff = now - MinTextureAge;
+        auto& times = recent_texture_frame_times;
+        while (!times.empty() && (times.front() <= cutoff || times.size() >= MaxRecentFrames)) {
+            times.pop_front();
+        }
+        times.push_back(now);
+
+        // Apply the extra age to ordinary collection while there is room to wait. Actual
+        // allocator failure, the load-surge drain and eviction before allocation are separate.
+        const size_t newest = (load_guard_next + load_guard_samples.size() - 1) %
+                              load_guard_samples.size();
+        constexpr u64 MinDriverHeadroom = 1_GiB;
+        const bool can_wait = budget_seen.mode > 0 && load_guard_count != 0 &&
+                              now - load_guard_sample_time <= std::chrono::milliseconds{150} &&
+                              budget_seen.budget > MinDriverHeadroom &&
+                              load_guard_samples[newest] <= budget_seen.budget - MinDriverHeadroom;
+        texture_age_floor_frames = can_wait ? (std::min)(frame_tick, u64{times.size()}) : 0;
+    }
     DrainSparseBlocks();
     DefragImages();
     LogVramOwners();
@@ -2610,6 +2921,53 @@ void TextureCache<P>::TickFrame() {
     SweepUnmapped();
     SweepSuperseded();
     SweepColdImages();
+    if constexpr (requires(u64& value) { runtime.MainHeapNumbers(value, value, value); }) {
+        const bool state_trace = Common::Nx2Hitch::OotStateTraceEnabled();
+        if (state_trace || Common::Nx2Hitch::MenuTraceEnabled()) {
+            auto& trace = menu_texture_trace;
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= trace.next_log && (state_trace || Common::Nx2Hitch::MenuTraceActive())) {
+                u64 heap{}, usage{}, budget{};
+                const bool has_budget = runtime.MainHeapNumbers(heap, usage, budget);
+                const u64 remakes =
+                    std::accumulate(trace.remade.begin(), trace.remade.end(), u64{0});
+                const u64 collector = trace.remade[static_cast<size_t>(DeleteReason::GarbageCollect)] +
+                                      trace.remade[ThrashCausePressured];
+                const u64 cold_sweep = trace.remade[static_cast<size_t>(DeleteReason::ColdSweep)];
+                const u64 covered_retire = trace.remade[static_cast<size_t>(DeleteReason::CoveredRetire)];
+                const u64 unmap = trace.remade[static_cast<size_t>(DeleteReason::Unmap)] +
+                                  trace.remade[static_cast<size_t>(DeleteReason::UnmapSweep)];
+                LOG_INFO(HW_GPU,
+                         "Menu trace: texture frame {}, VRAM {} MiB, driver budget {} MiB, "
+                         "OS budget {} MiB, area clean {}, recreated {} ({} KiB), "
+                         "collector {} ({} under pressure), cold sweep {}, covered retire {}, unmap {}, other {}, "
+                         "of which before allocation {}, load surge {}, sparse block {}; "
+                         "750 ms age floor {} frames",
+                         frame_tick, usage >> 20, budget >> 20, budget_seen.os_budget >> 20,
+                         area_clean_active, remakes, trace.remake_kib,
+                         collector, trace.remade[ThrashCausePressured], cold_sweep, covered_retire, unmap,
+                         remakes - collector - cold_sweep - covered_retire - unmap,
+                         trace.vram_remade[static_cast<size_t>(VramEviction::BeforeAllocation)],
+                         trace.vram_remade[static_cast<size_t>(VramEviction::LoadSurge)],
+                         trace.vram_remade[static_cast<size_t>(VramEviction::SparseBlock)],
+                         texture_age_floor_frames);
+                if (state_trace) {
+                    const u64 effective_budget =
+                        budget_seen.os_budget == 0 ? budget : (std::min)(budget, budget_seen.os_budget);
+                    const u64 free = effective_budget - (std::min)(effective_budget, usage);
+                    LOG_INFO(HW_GPU,
+                             "OoT texture budget: frame {}, sample valid {}, effective budget "
+                             "{} MiB, headroom {} MiB, reserve {} MiB, last control sample {} ms",
+                             frame_tick, has_budget && budget != 0, effective_budget >> 20,
+                             free >> 20, budget_seen.headroom >> 20,
+                             std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 now - budget_control_time).count());
+                }
+                trace = {};
+                trace.next_log = now + std::chrono::milliseconds{state_trace ? 200 : 100};
+            }
+        }
+    }
     TickThrashGuard();
     // An image that could not be made at all: the driver is out of memory whatever the counts
     // say, so collect as at the critical threshold.
@@ -2865,7 +3223,7 @@ bool TextureCache<P>::CoveredByNewerWrites(ImageId image_id, ImageBase& image) {
 
 template <class P>
 void TextureCache<P>::RetireCovered(ImageId image_id, Image& image) {
-    const DeleteReasonScope delete_reason_scope{*this, DeleteReason::ColdSweep};
+    const DeleteReasonScope delete_reason_scope{*this, DeleteReason::CoveredRetire};
     covered_stats.deleted_bytes += ImageMemoryBytes(image);
     if (covered_swept.size() >= 65536) {
         covered_swept.clear(); // the oldest are the least likely to be read again
@@ -2988,6 +3346,8 @@ void TextureCache<P>::SweepColdImages() {
     if (cold_frames == 0) {
         return;
     }
+    const auto now = std::chrono::steady_clock::now();
+    const bool menu_grace_active = MenuGraceCanWait(now);
     static const bool sweep_guarded = [] {
         const char* value = std::getenv("EDEN_NX2_TC_COLD_GUARDED");
         return value != nullptr && value[0] == '1';
@@ -3067,6 +3427,11 @@ void TextureCache<P>::SweepColdImages() {
                         ++index;
                         continue;
                     }
+                    if (menu_grace_active) {
+                        image.covered_check_frame = image.covered_overlap_frame - 1;
+                        ++index;
+                        continue;
+                    }
                     ++covered_deleted;
                     ++covered_stats.sweep_deleted;
                     RetireCovered(image_id, image);
@@ -3085,7 +3450,10 @@ void TextureCache<P>::SweepColdImages() {
             continue;
         }
         // Touched (prepared, bound, sampled) in the last K host frames.
-        if (frame_tick - lru_cache.Tick(image.lru_index) < cold_frames) {
+        const u64 effective_cold_frames = menu_grace_active
+                                              ? (std::max)({cold_frames, texture_age_floor_frames, u64{60}})
+                                              : cold_frames;
+        if (frame_tick - lru_cache.Tick(image.lru_index) < effective_cold_frames) {
             ++index;
             continue;
         }
@@ -5530,9 +5898,6 @@ void TextureCache<P>::RefreshContents(Image& image, ImageId image_id) {
         QueueAsyncUnswizzle(image, image_id);
         return;
     }
-    ++images_uploaded;
-    uploaded_bytes += image.guest_size_bytes;
-    largest_upload = (std::max<u64>)(largest_upload, image.guest_size_bytes);
     // EDEN_NX2_EXP7: log the uploads that hold a draw back (over 2 ms).
     const bool upload_trace = VideoCore::Nx2Debug::Experiment(7) != 0;
     const auto upload_begin = upload_trace ? std::chrono::steady_clock::now()
@@ -5544,7 +5909,14 @@ void TextureCache<P>::RefreshContents(Image& image, ImageId image_id) {
     if (TryZeroUpload(image)) {
         // FRITCHII_ZERO_UPLOAD: cleared on the GPU, what the upload of these bytes writes.
     } else if (!UploadInChunks(image)) {
-        auto staging = runtime.UploadStagingBuffer(MapSizeBytes(image));
+        const size_t staging_bytes = MapSizeBytes(image);
+        if constexpr (requires { runtime.PrepareAstcTranscodeUpload(image, staging_bytes); }) {
+            if (True(image.flags & ImageFlagBits::AcceleratedUpload) &&
+                !runtime.PrepareAstcTranscodeUpload(image, staging_bytes)) {
+                return;
+            }
+        }
+        auto staging = runtime.UploadStagingBuffer(staging_bytes);
         if (upload_trace) [[unlikely]] {
             staging_end = std::chrono::steady_clock::now();
         }
@@ -5554,6 +5926,9 @@ void TextureCache<P>::RefreshContents(Image& image, ImageId image_id) {
         UploadImageContents(image, staging);
         runtime.InsertUploadMemoryBarrier();
     }
+    ++images_uploaded;
+    uploaded_bytes += image.guest_size_bytes;
+    largest_upload = (std::max<u64>)(largest_upload, image.guest_size_bytes);
     // EXP76 & 2: the bytes just uploaded, hashed after the upload read them. A CPU write since
     // the image was tracked marked it CpuModified again: then no hash (the next refresh uploads).
     if (hashable && False(image.flags & ImageFlagBits::CpuModified)) {
@@ -6871,10 +7246,10 @@ void TextureCache<P>::NoteNewSampledImage(ImageId image_id, GPUVAddr gpu_addr) {
              "before ({} KiB); {} different so far; most made:{}",
              made, made_again, bytes_again >> 10, seen.size(), text.empty() ? " none twice" : text);
     // Reason order: other, garbage collect, cold sweep, unmap, join, slot retire, unmap sweep,
-    // superseded sweep.
+    // superseded sweep, covered retire.
     static constexpr std::array<const char*, static_cast<size_t>(DeleteReason::Count)> names{
         "other",       "garbage collect", "cold sweep", "unmap", "join", "slot retire",
-        "unmap sweep", "superseded sweep"};
+        "unmap sweep", "superseded sweep", "covered retire"};
     std::string deletes;
     std::string remade;
     for (size_t r = 0; r < names.size(); ++r) {
@@ -7324,7 +7699,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         std::ranges::for_each(join_right_aliased_ids, mark);
     }
     NoteMadeShape(new_info);
-    NoteThrashMade(new_info, gpu_addr);
+    const bool watch_prepare = NoteThrashMade(new_info, gpu_addr);
     if constexpr (requires(const Image& image) { image.FromPool(); }) {
         rt_stats.pooled_images += slot_images[new_image_id].FromPool() ? 1 : 0;
         Churn::Add(Churn::ImagesPooled, slot_images[new_image_id].FromPool() ? 1 : 0);
@@ -7344,6 +7719,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
         }
     }
     Image& new_image = slot_images[new_image_id];
+    new_image.menu_trace_prepare = watch_prepare ? 1 : 0;
     if ((VideoCore::Nx2Debug::Experiment(68) & 4) != 0 && RelocationShaped(new_info)) {
         // EXP68 bit 4 (fable52_answer_npcdips 2, item 3): same address and format, other dims
         // among the overlaps: a size-varying slot. Its images skip the pool.
@@ -8599,7 +8975,7 @@ void TextureCache<P>::DeleteImage(ImageId image_id, bool immediate_delete) {
         ForgetContent(image_id, image, true);
     }
     // EXP77: a GPU-written chain target the cold sweep takes leaves its shape at its address.
-    if (delete_reason == DeleteReason::ColdSweep &&
+    if ((delete_reason == DeleteReason::ColdSweep || delete_reason == DeleteReason::CoveredRetire) &&
         True(image.flags & ImageFlagBits::GpuModified) && RelocationShaped(image.info) &&
         VideoCore::Nx2Debug::Experiment(77) != 0 && nx2_swept_shapes.size() < 65536) {
         nx2_swept_shapes[image.gpu_addr] = RelocationShapeKey(image.info);
@@ -9521,6 +9897,19 @@ void TextureCache<P>::PrepareImage(ImageId image_id, bool is_modification, bool 
     }
     if (image.lost_contents != 0) [[unlikely]] {
         NoteLostContents(image, is_modification, invalidate);
+    }
+    if (image.menu_trace_prepare && !is_modification) [[unlikely]] {
+        const bool dirty = True(image.flags & ImageFlagBits::CpuModified);
+        const bool decoding = True(image.flags & ImageFlagBits::IsDecoding);
+        const bool unbacked = True(image.flags & ImageFlagBits::Unbacked);
+        if (image.menu_trace_prepare == 1 || (!dirty && !decoding && !unbacked)) {
+            LOG_INFO(HW_GPU,
+                     "OoT texture prepare: image {:#x}/{:#x} frame {}, CPU dirty {}, "
+                     "decode pending {}, unbacked {}",
+                     image.gpu_addr, RelocationShapeKey(image.info), frame_tick, dirty, decoding,
+                     unbacked);
+        }
+        image.menu_trace_prepare = (dirty || decoding) && !unbacked ? 2 : 0;
     }
     if (is_modification) {
         if constexpr (requires { &Image::BackTilesWhole; }) {

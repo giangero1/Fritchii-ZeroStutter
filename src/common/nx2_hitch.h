@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #if defined(__linux__)
@@ -227,6 +228,13 @@ void LogGpuBreadcrumbs(const char* prefix);
 
 /// From the game's present, one thread: `gap_us` since its previous present.
 void OnPresent(long long gap_us);
+
+/// Local texture investigation. A manual marker starts a four-second capture window.
+[[nodiscard]] bool MenuTraceEnabled();
+void MarkMenuTrace(std::string_view menu);
+[[nodiscard]] bool MenuTraceActive();
+/// Read-only guest and texture diagnostics for the local OoT menu playtest.
+[[nodiscard]] bool OotStateTraceEnabled();
 
 // Hang report (2026-11-16, helper AW's boot hang: 0 frames from 17 s on, every thread idle, and
 // nothing in the log said what the game waited on). Once a second (the Pulse thread, or a small

@@ -1,4 +1,4 @@
-# Fritchii Zero-Stutter Custom Build (v6.2.2)
+# Fritchii Zero-Stutter Custom Build (v6.2.3)
 ### *The Legend of Zelda: Ocarina of Time (Nintendo Switch 2 Remake) on PC*
 
 [![Release](https://img.shields.io/github/v/release/giangero1/Fritchii-ZeroStutter?color=brightgreen&label=Release)](https://github.com/giangero1/Fritchii-ZeroStutter/releases)
@@ -12,6 +12,28 @@ The **v6.2 Zero-Stutter update** moves the engine onto **upstream Fritchii v6.2*
 3. **10–20 seconds of very low FPS after entering a new area** on 8 GB cards. It now recovers in **1–2 s** on most loads, even with a browser and a Twitch stream open next to the game.
 
 > ⚠️ **Test release.** It was measured on one PC (RTX 3070 8 GB + 5800X3D). If anything looks or runs worse for you, every fix below has its own off-switch. **Provided as is, with no support.**
+
+---
+
+## 🆕 New in v6.2.3: Menu Exit Stability, Shader Setup Guide & Telemetry
+
+**1. Outdoor Castle & Overworld Menu Exit Fix:**
+Closing the L1 inventory interface or pause menu in outdoor areas no longer makes world textures, terrain, or Link models disappear and take seconds to recover.
+- In v6.2.2, the 4-frame cold sweep aggressively evicted unrendered 1440p world render targets while paused in the inventory, producing 160–185 ms hitches and expensive GPU readbacks upon exiting.
+- v6.2.3 protects primary render targets and elevates the idle floor during menu interactions, while strictly maintaining the **1,536 MiB driver headroom safety reserve**.
+- Verified across extended outdoor Castle sessions: `recreated: 0`, `cold sweep: 0`, `covered retire: 0`, completely eliminating texture pop-in or missing models upon returning to gameplay.
+
+**2. Built-in Shader Setup Guide (`Help → Shader setup`):**
+A new helpful guidance popup now explains how to achieve zero-stutter shader precompilation:
+- Explains the difference between the base ~19,000 shader cache and Frizti's official **~120,000 pipeline precompile recipe** (`recipes\OoT v131072 (cache v54).nx2recipe`).
+- Includes a direct button to open Frizti's official Fritchii v6.2 download page.
+- Clarifies that the proprietary recipe file requires Frizti's written permission and must be obtained directly from the official release (never bundled in third-party packages).
+- Appears once on launch if the recipe is missing, and can be reopened anytime via **Help → Shader setup**.
+
+**3. Independent Eviction Telemetry (`CoveredRetire`):**
+Texture cache telemetry now tracks covered image retirement separately from ordinary cold sweeps, providing cleaner and more accurate diagnostics in the logs.
+
+**4. The window title shows the fork version** ("Zero-Stutter fork v6.2.3").
 
 ---
 
@@ -164,8 +186,8 @@ Still recommended for v6.2. The used list builds at boot, and everything else bu
 
 The zip already has the right folders: extract it straight into your emulator folder (next to `fritchii.exe`), or put `vulkan-frizti.fork-v54.bin` and `vulkan_used-frizti.fork-v54.bin` into:
 ```text
-fritchii-v6.2.2-zerostutter-win64/
-├── Play-Fritchii-6.2.2-ZeroStutter.cmd
+fritchii-v6.2.3-zerostutter-win64/
+├── Play-Fritchii-6.2.3-ZeroStutter.cmd
 ├── nx2_switches.txt
 ├── fritchii.exe
 ├── lichii.exe
@@ -193,7 +215,7 @@ To get them:
 
 ## ⚙️ CPU Core & Thread Tuning (For 6-Core & 4-Core Users)
 
-If your CPU has fewer than 8 cores, open `Play-Fritchii-6.2.2-ZeroStutter.cmd` (or **Tools → Switches** / `nx2_switches.txt`) and adjust `EDEN_NX2_WARM_THREADS`:
+If your CPU has fewer than 8 cores, open `Play-Fritchii-6.2.3-ZeroStutter.cmd` (or **Tools → Switches** / `nx2_switches.txt`) and adjust `EDEN_NX2_WARM_THREADS`:
 
 | CPU Cores / Threads | Example Processors | Recommended `WARM_THREADS` |
 | :--- | :--- | :---: |
@@ -205,11 +227,11 @@ If your CPU has fewer than 8 cores, open `Play-Fritchii-6.2.2-ZeroStutter.cmd` (
 
 ## 🚀 Quick Start Guide
 
-1. Download **`fritchii-v6.2.2-zerostutter-win64.zip`** from [Releases](https://github.com/giangero1/Fritchii-ZeroStutter/releases/latest).
-2. Extract it into a clean folder (e.g. `D:\Games\Fritchii-6.2.2-ZeroStutter`). Coming from v6.2.x or v6.0? You can copy your old `user` folder over (saves, config, shader cache), or just replace `fritchii.exe` in your v6.2.x folder.
+1. Download **`fritchii-v6.2.3-zerostutter-win64.zip`** from [Releases](https://github.com/giangero1/Fritchii-ZeroStutter/releases/latest).
+2. Extract it into a clean folder (e.g. `D:\Games\Fritchii-6.2.3-ZeroStutter`). Coming from v6.2.x or v6.0? You can copy your old `user` folder over (saves, config, shader cache), or just replace `fritchii.exe` in your v6.2.x folder.
 3. *(Recommended)* Put the two `fork-v54` shader files into `user\cache\shader\0400486024dec000\`.
    For the full ~120k precompiled shaders, also copy the `recipes` folder from the official Fritchii (see [the recipe section](#want-the-full-120k-precompiled-shaders-get-friztis-recipe-from-the-official-fritchii)).
-4. Run **`Play-Fritchii-6.2.2-ZeroStutter.cmd`**.
+4. Run **`Play-Fritchii-6.2.3-ZeroStutter.cmd`**.
 5. Right-click **`FG`** on the status bar (or **Emulation → Configure → Graphics**) to pick **DLSS-G**, **Optical Flow** or **LSFG**.
 
 **Something wrong?** Add the matching off-switch from the table above to `nx2_switches.txt` (one per line, e.g. `EDEN_NX2_STALE_READS=0`), and restart.
@@ -224,6 +246,7 @@ If your CPU has fewer than 8 cores, open `Play-Fritchii-6.2.2-ZeroStutter.cmd` (
 ---
 
 ## 📦 Previous Versions (Preserved Backups)
+- **Fritchii v6.2.2 Zero-Stutter:** [v6.2.2 Release](https://github.com/giangero1/Fritchii-ZeroStutter/releases/tag/v6.2.2-zerostutter) and the [`release/v6.2.2-zerostutter`](https://github.com/giangero1/Fritchii-ZeroStutter/tree/release/v6.2.2-zerostutter) branch.
 - **Fritchii v6.2.1 Zero-Stutter:** [v6.2.1 Release](https://github.com/giangero1/Fritchii-ZeroStutter/releases/tag/v6.2.1-zerostutter) and the [`release/v6.2.1-zerostutter`](https://github.com/giangero1/Fritchii-ZeroStutter/tree/release/v6.2.1-zerostutter) branch.
 - **Fritchii v6.2 Zero-Stutter:** [v6.2 Release](https://github.com/giangero1/Fritchii-ZeroStutter/releases/tag/v6.2-zerostutter) and the [`release/v6.2-zerostutter`](https://github.com/giangero1/Fritchii-ZeroStutter/tree/release/v6.2-zerostutter) branch.
 - **Fritchii v6.0 Zero-Stutter (4K 127 FPS):** [v6.0 Release](https://github.com/giangero1/Fritchii-ZeroStutter/releases/tag/v6.0-zerostutter) and the [`release/v6.0-zerostutter`](https://github.com/giangero1/Fritchii-ZeroStutter/tree/release/v6.0-zerostutter) branch.

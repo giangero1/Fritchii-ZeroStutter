@@ -31,6 +31,7 @@
 #include "video_core/host_shaders/vulkan_occl_flag_frag_spv.h"
 #include "video_core/fritchii_occl_flag.h"
 #include "common/lowend_sim.h"
+#include "common/nx2_hitch.h"
 #include "common/cityhash.h"
 #include "common/polyfill_thread.h"
 #include "common/scm_rev.h"
@@ -5788,6 +5789,7 @@ bool PipelineCache::WaitForWarmTurn(std::stop_token stop) {
 void PipelineCache::StartPrecompiled(u64 title_id, const std::filesystem::path& base_dir) {
     precompile_thread = {};
     shader_notify.SetPrecompileAvailable(false);
+    shader_notify.SetPrecompileSourceMissing(false);
     const int mode = VideoCommon::Nx2Precompile::Mode();
     if (mode == 0) {
         return;
@@ -5814,8 +5816,11 @@ void PipelineCache::StartPrecompiled(u64 title_id, const std::filesystem::path& 
                 notify.SetPrecompilePending(false);
             }
         } pending_guard{shader_notify};
-        const auto file = VideoCommon::Nx2Precompile::EnsurePrecompiledFile(title_id, base_dir,
-                                                                            CACHE_VERSION, stop);
+        bool missing_source{};
+        const auto file = VideoCommon::Nx2Precompile::EnsurePrecompiledFile(
+            title_id, base_dir, CACHE_VERSION, stop, missing_source);
+        shader_notify.SetPrecompileSourceMissing(missing_source && !stop.stop_requested() &&
+                                                 !warm_cancel);
         if (file.empty() || stop.stop_requested() || warm_cancel) {
             return;
         }
@@ -8141,6 +8146,11 @@ void ReportWorstFrame() {
         const Frame frame{now - last_tick, frame_tally, held_total - last_held,
                           skipped_total - last_skipped};
         ++frames;
+        if (Common::Nx2Hitch::MenuTraceActive() &&
+            (frame.tally.count > 0 || frame.held.count() > 0 || frame.skipped > 0)) {
+            LOG_INFO(Render_Vulkan, "Menu trace: pipeline work in {:.1f} ms frame; {}",
+                     ms(frame.time), describe(frame));
+        }
         if (frame.time > std::chrono::milliseconds{33}) {
             ++slow_frames;
             if (every_slow_frame && logged_slow < 2000) {

@@ -206,13 +206,16 @@ std::optional<Recipe> FindRecipe(u64 title_id, const std::filesystem::path& titl
 }
 
 std::filesystem::path EnsurePrecompiledFile(u64 title_id, const std::filesystem::path& title_dir,
-                                            u32 cache_version, std::stop_token stop) {
+                                            u32 cache_version, std::stop_token stop,
+                                             bool& missing_source) {
+    missing_source = false;
     const auto precompiled = PrecompiledPath(title_dir, cache_version);
     std::error_code error;
     const bool have_file = std::filesystem::exists(precompiled, error);
     const auto recipe = FindRecipe(title_id, title_dir, cache_version);
     if (!recipe) {
         if (!have_file) {
+            missing_source = !error && !stop.stop_requested();
             LOG_INFO(Render_Vulkan,
                      "Precompiled pipelines: no {} and no recipe for {:016X} (looked in {} and {})",
                      precompiled.filename().string(), title_id,

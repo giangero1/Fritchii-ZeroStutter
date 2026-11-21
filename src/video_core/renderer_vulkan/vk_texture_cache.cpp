@@ -20,6 +20,7 @@
 #include <iterator>
 #include <numeric>
 #include "common/alignment.h"
+#include "common/nx2_hitch.h"
 #include "common/bit_util.h"
 #include "common/div_ceil.h"
 #include "common/nx2_timeline.h"
@@ -388,6 +389,16 @@ constexpr std::array<VkFormat, 2> OpaqueAstcViewFormats{VK_FORMAT_BC1_RGBA_UNORM
     }
     return Settings::values.accelerate_astc.GetValue() == Settings::AstcDecodeMode::Gpu &&
            Settings::GetAstcRecompression() != Settings::AstcRecompression::Uncompressed;
+}
+
+bool EarlyAstcUploadCheckEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("FRITCHII_ASTC_EARLY_UPLOAD_CHECK");
+        const bool active = value != nullptr && value[0] == '1';
+        LOG_INFO(Render_Vulkan, "ASTC early upload check: {}", active ? "on" : "off");
+        return active;
+    }();
+    return enabled;
 }
 
 [[nodiscard]] bool WillUseAcceleratedAstcDecode(const Device& device, const ImageInfo& info) {
@@ -3877,6 +3888,12 @@ void TextureCacheRuntime::SubmitImageFrees() {
 }
 
 void TextureCacheRuntime::TickFrame() {
+    if (astc_trace_deferrals != 0) {
+        LOG_INFO(Render_Vulkan, "Menu trace: ASTC deferred {} uploads; staging bytes avoided {}",
+                 astc_trace_deferrals, astc_trace_avoided_staging_bytes);
+        astc_trace_deferrals = 0;
+        astc_trace_avoided_staging_bytes = 0;
+    }
     ++image_pool_frame;
     {
         // On the timeline (fable52_answer_chicken): the pool's evictions at the frame's end.
@@ -6510,15 +6527,15 @@ void TextureCacheRuntime::AccelerateImageUploadLayers(
     astc_decoder_pass->AssembleLayers(image, map, swizzles, layers);
 }
 
-void TextureCacheRuntime::TranscodeAstcToBcn(
-    Image& image, const StagingBufferRef& map,
-    std::span<const VideoCommon::SwizzleParameters> swizzles) {
-    const ImageInfo& info = image.info;
-    const u32 width = info.size.width;
-    const u32 height = info.size.height;
-    const u32 levels = static_cast<u32>(info.resources.levels);
-    const u32 layers = static_cast<u32>(info.resources.layers);
+bool TextureCacheRuntime::PrepareAstcTranscodeUpload(Image& image, size_t staging_bytes) {
+    if (!EarlyAstcUploadCheckEnabled() || !bc_encoder_pass ||
+        !WillUseGpuBcnTranscode(device, image.info)) {
+        return true;
+    }
+    return AdmitAstcTranscode(image, staging_bytes);
+}
 
+bool TextureCacheRuntime::AdmitAstcTranscode(Image& image, size_t avoided_staging_bytes) {
     // FRITCHII_ASTC_SCRATCH_CAP_MIB (boot, default 512, 0 = no cap; ZeroStutter): each texture
     // decodes into an RGBA8 image 4-8x the size of its BCn result, freed only once the GPU ran
     // the frame. An area load (OoT on an 8 GB RTX 3070, 1440p -> 4K DLSS + frame generation)
@@ -6619,8 +6636,28 @@ void TextureCacheRuntime::TranscodeAstcToBcn(
             // after the GPU ran these decodes and their images were reused or freed.
             image.flags |= VideoCommon::ImageFlagBits::CpuModified;
             TransitionImageLayout(image);
-            return;
+            if (Common::Nx2Hitch::MenuTraceActive()) {
+                ++astc_trace_deferrals;
+                astc_trace_avoided_staging_bytes += avoided_staging_bytes;
+            }
+            return false;
         }
+    }
+    return true;
+}
+
+void TextureCacheRuntime::TranscodeAstcToBcn(
+    Image& image, const StagingBufferRef& map,
+    std::span<const VideoCommon::SwizzleParameters> swizzles) {
+    const ImageInfo& info = image.info;
+    const u32 width = info.size.width;
+    const u32 height = info.size.height;
+    const u32 levels = static_cast<u32>(info.resources.levels);
+    const u32 layers = static_cast<u32>(info.resources.layers);
+
+    // The baseline applies the same admission policy here, after the staging copy.
+    if (!EarlyAstcUploadCheckEnabled() && !AdmitAstcTranscode(image, 0)) {
+        return;
     }
     // The BC encoder declares layout(rgba8). Identical byte layout is not enough:
     // its storage image view must have the matching R8G8B8A8_UNORM format.

@@ -185,9 +185,14 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
     std::array<u64, 10> load_guard_samples{};
     size_t load_guard_next{};
     size_t load_guard_count{};
+    u64 load_guard_driver_budget{};
     std::chrono::steady_clock::time_point load_guard_sample_time{};
     std::chrono::steady_clock::time_point load_guard_until{};
     u64 load_guard_surges{};
+    std::deque<std::chrono::steady_clock::time_point> recent_texture_frame_times;
+    u64 texture_age_floor_frames{};
+    std::chrono::steady_clock::time_point menu_reclaim_sample{};
+    u64 menu_reclaim_bytes{};
     /// FRITCHII_AREA_CLEAN (boot; 0 off, 1 = with the small card profile (default), 2 = any
     /// card): for 8 s after an area load starts, the previous area's leftovers go.
     [[nodiscard]] static bool AreaCleanOn() {
@@ -231,7 +236,13 @@ class TextureCache : public VideoCommon::ChannelSetupCaches<TextureCacheChannelI
         u64 freed{};
         u64 capped{};  ///< passes refused by the per-frame cap
         u64 short_of{}; ///< passes that ended still over critical
+        u64 within_budget{}; ///< creates above the cache cap with room in the driver budget
     } create_enforce_stats;
+    struct CreateBudgetSample {
+        std::chrono::steady_clock::time_point time{};
+        u64 budget{};
+        u64 projected_usage{};
+    } create_budget_sample;
     u64 create_enforce_frame{~0ULL};
     u32 create_enforce_frame_deletes{};
     /// FRITCHII_TC_THRASH_GUARD: the frame a pass walked every idle image and found none to
@@ -808,6 +819,7 @@ private:
 
     /// Runs the Garbage Collector.
     void RunGarbageCollector(bool out_of_memory);
+    [[nodiscard]] bool MenuGraceCanWait(std::chrono::steady_clock::time_point now) const;
 
     /// EXP121: the collector's download without a wait (false: take the waiting path).
     bool QueueCollectDownload(ImageId image_id);
@@ -870,19 +882,26 @@ private:
         SlotRetire,
         UnmapSweep,
         SupersededSweep,
+        CoveredRetire,
         Count
     };
+    enum class VramEviction : u8 { None, BeforeAllocation, LoadSurge, SparseBlock };
     DeleteReason delete_reason = DeleteReason::Other;
+    VramEviction vram_eviction = VramEviction::None;
     struct DeleteReasonScope {
-        DeleteReasonScope(TextureCache& cache_, DeleteReason reason)
-            : cache{cache_}, previous{cache_.delete_reason} {
+        DeleteReasonScope(TextureCache& cache_, DeleteReason reason,
+                          VramEviction eviction = VramEviction::None)
+            : cache{cache_}, previous{cache_.delete_reason}, previous_eviction{cache_.vram_eviction} {
             cache.delete_reason = reason;
+            cache.vram_eviction = eviction;
         }
         ~DeleteReasonScope() {
             cache.delete_reason = previous;
+            cache.vram_eviction = previous_eviction;
         }
         TextureCache& cache;
         DeleteReason previous;
+        VramEviction previous_eviction;
     };
     /// Deleted images by address: the reason, bit 7 set when the GPU had written the image.
     std::unordered_map<GPUVAddr, u8> nx2_deleted_reasons;
@@ -895,9 +914,11 @@ private:
         GPUVAddr gpu_addr{}; ///< 0 = empty
         u64 shape{};         ///< RelocationShapeKey
         u64 last_use{};      ///< Frame of its last use
+        u64 evicted_frame{};
         u32 kib{};           ///< Its device memory
         u8 cause{};          ///< ThrashCause
         bool costly{};       ///< CostlyLoad: ASTC or BCn that is decoded again
+        VramEviction eviction{};
     };
     static constexpr size_t ThrashGhostSlots = 8192;
     /// DeleteReason's values, then the collector under pressure on its own: the one the floor
@@ -921,6 +942,14 @@ private:
         u32 raised{};
         u32 capped{};
     } thrash_stats;
+    struct MenuTextureTrace {
+        std::array<u64, ThrashCauses> remade{};
+        std::array<u64, 4> vram_remade{};
+        u64 remake_kib{};
+        std::chrono::steady_clock::time_point next_log{};
+    } menu_texture_trace;
+    std::chrono::steady_clock::time_point menu_texture_details_until{};
+    u32 menu_texture_details{};
     /// The ghost slot of an address and shape.
     [[nodiscard]] static size_t ThrashSlot(GPUVAddr gpu_addr, u64 shape) noexcept {
         const u64 mixed = ((gpu_addr >> 8) ^ shape) * 0x9E3779B97F4A7C15ULL;
@@ -1562,7 +1591,7 @@ private:
     /// FRITCHII_TC_THRASH_GUARD (live): notes a deleted image, recognises one made again, and
     /// once a second sets how recently used an image the collector must leave alone.
     void NoteThrashDelete(const Image& image);
-    void NoteThrashMade(const ImageInfo& info, GPUVAddr gpu_addr);
+    bool NoteThrashMade(const ImageInfo& info, GPUVAddr gpu_addr);
     void TickThrashGuard();
     /// FRITCHII_VRAM_OWNERS (live, seconds, default 10): one line with who holds device memory.
     void LogVramOwners();
@@ -1669,7 +1698,7 @@ private:
         u64 sampled_undrawn{};   ///< Sampled before anything drew into them
         u64 sampled_drawn{};     ///< Sampled after draws that did not clear them whole
         u64 sampled_bytes{};
-        std::array<u64, 10> sampled_by_reason{}; ///< DeleteReason (8 = relocation, 9 = unknown)
+        std::array<u64, 11> sampled_by_reason{}; ///< DeleteReason (9 = relocation, 10 = unknown)
         u64 sampled_guarded{};   ///< Of the sampled: the dropped image had been read in a later frame
         u64 relocation_guards{}; ///< Shapes guarded from relocation after a loss it caused
         /// FRITCHII_LOST_WRITEBACK, by LostPath: queued, landed (and bytes), refused (a newer

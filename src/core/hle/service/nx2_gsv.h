@@ -80,6 +80,7 @@
 #include "core/hle/service/nvdrv/nvdrv_interface.h"
 #include "core/hle/service/nx2_stub_interface.h"
 #include "core/hle/service/nx2_image_layout.h"
+#include "core/hle/service/nx2_oot_menu_trace.h"
 #include "core/hle/service/nx2_video_input_queue.h"
 #include "core/hle/service/nx2_present_pacer.h"
 #include "core/hle/service/nx2_video_ready.h"
@@ -2142,6 +2143,7 @@ private:
                 Common::Nx2Hitch::OnPresent(frame);
             }
             m_stats.last_present = entered;
+            m_oot_menu_trace.OnGuestPresent(system, entered);
             if (++m_stats.presents == 600) {
                 LOG_INFO(Service,
                          "nx2:vi2 last 600 presents: frame {} us (max {}, {} over 100 ms), "
@@ -2170,6 +2172,7 @@ private:
         u32 presents{}, ran_ahead{};
         std::chrono::steady_clock::time_point last_present{};
     } m_stats{};
+    Nx2OotMenuTrace m_oot_menu_trace;
     u32 m_previous_fence_id{~0U}; // none yet (WaitForFrame ignores ids >= 192)
     u32 m_previous_fence_value{};
     u32 m_frame_fence_relearn_logs{}; // the first 8 frame-fence learn lines

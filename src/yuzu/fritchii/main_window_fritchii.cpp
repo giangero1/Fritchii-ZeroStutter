@@ -3,13 +3,24 @@
 // MainWindow's Fritchii setup, kept out of main_window.cpp so merges stay clean. It runs
 // once at the end of the constructor and does nothing in a build without the Fritchii look.
 
+#include <QAction>
 #include <QApplication>
+#include <QDesktopServices>
 #include <QMessageBox>
+#include <QMenu>
 #include <QPushButton>
+#include <QShortcut>
 #include <QStatusBar>
 #include <QTimer>
+#include <QUrl>
 
+#include "common/nx2_hitch.h"
+#include "common/oot_menu_grace.h"
 #include "core/core.h"
+#include "hid_core/frontend/emulated_controller.h"
+#include "hid_core/frontend/emulated_devices.h"
+#include "hid_core/hid_core.h"
+#include "qt_common/config/uisettings.h"
 #include "qt_common/qt_common.h"
 #include "qt_common/util/game.h"
 #include "ui_main.h"
@@ -58,6 +69,161 @@ void MainWindow::SetUpFritchiiUi() {
         {.export_log = [this] { OnExportLog(); },
          .whats_new = [this] { FritchiiUi::ShowWhatsNew(this); },
          .delete_shader_cache = [delete_shader_cache] { delete_shader_cache(OcarinaOfTime); }});
+
+    const auto show_shader_setup = [this](bool startup_offer) {
+        const QString dialog_name = QStringLiteral("FritchiiShaderSetup");
+        QWidget* parent = render_window && render_window->isVisible() ? render_window->window()
+                                                                    : this;
+        if (auto* existing = parent->findChild<QMessageBox*>(dialog_name)) {
+            existing->raise();
+            existing->activateWindow();
+            return;
+        }
+
+        auto* box = new QMessageBox(QMessageBox::Information, tr("Ocarina of Time shader setup"),
+                                    tr("Frizti's recipe prepares about 120,000 shader pipelines "
+                                       "for Ocarina of Time."),
+                                    QMessageBox::NoButton, parent);
+        box->setObjectName(dialog_name);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        QString instructions = tr(
+            "<p>The separate shader cache pack contains about <b>19,000 shaders</b>. Without "
+            "the full preparation, new shaders compile as you play and can cause stutter, "
+            "especially when entering new areas.</p>"
+            "<p><b>Set up Zero-Stutter</b></p>"
+            "<ol>"
+            "<li>Download <b>Fritchii-v6.2-Windows-x64.zip</b> from <b>Assets</b> on Frizti's "
+            "release page and extract it.</li>"
+            "<li>With Frizti's written permission, copy the whole <b>recipes</b> folder, "
+            "including <b>RECIPE-LICENSE.txt</b>, next to Zero-Stutter's "
+            "<b>fritchii.exe</b>.</li>"
+            "<li>Restart Zero-Stutter and launch Ocarina of Time. <b>Preparing shaders</b> "
+            "can take 10-20 minutes the first time. Later launches reuse that work.</li>"
+            "</ol>"
+            "<p>You can also run the extracted <b>fritchii.exe</b> to play in the official "
+            "build.</p>");
+        if (!startup_offer) {
+            instructions += tr("<p>With the full recipe, the game log typically shows "
+                               "<b>116,351 graphics</b> and <b>4,085 compute</b> pipelines.</p>");
+        }
+        instructions += tr("<p>Shader precompile recipe by Frizti (Fritchii). "
+                           "<a href=\"https://github.com/Frizti/Fritchii/blob/"
+                           "fritchii-v6.2/LICENSES/Fritchii-Recipe.txt\">Recipe terms</a></p>");
+        box->setInformativeText(instructions);
+        box->setTextInteractionFlags(Qt::TextBrowserInteraction);
+        QPushButton* download = box->addButton(tr("Open official Fritchii download"),
+                                               QMessageBox::AcceptRole);
+        QPushButton* dismiss = box->addButton(startup_offer ? tr("Keep playing") : tr("Close"),
+                                              QMessageBox::RejectRole);
+        box->setDefaultButton(dismiss);
+        box->setEscapeButton(dismiss);
+        connect(box, &QMessageBox::finished, this, [this, box, download, startup_offer](int) {
+            if (startup_offer) {
+                UISettings::values.fritchii_shader_setup_seen.SetValue(true);
+                OnSaveConfig();
+            }
+            if (box->clickedButton() == download) {
+                const QUrl url(QStringLiteral(
+                    "https://github.com/Frizti/Fritchii/releases/tag/fritchii-v6.2"));
+                if (!QDesktopServices::openUrl(url)) {
+                    auto* notice = new QMessageBox(QMessageBox::Information,
+                                                   tr("Open official Fritchii download"),
+                                                   url.toString(), QMessageBox::Close, this);
+                    notice->setTextInteractionFlags(Qt::TextSelectableByMouse |
+                                                    Qt::TextSelectableByKeyboard);
+                    notice->setAttribute(Qt::WA_DeleteOnClose);
+                    notice->open();
+                }
+            }
+        });
+        if (startup_offer) {
+            connect(this, &MainWindow::EmulationStopping, box, &QMessageBox::reject);
+        }
+        box->open();
+    };
+    auto* shader_setup = ui->menu_Help->addAction(tr("Shader setup"));
+    connect(shader_setup, &QAction::triggered, this,
+            [show_shader_setup] { show_shader_setup(false); });
+
+    const bool trace_menu = Common::Nx2Hitch::MenuTraceEnabled();
+    if (trace_menu) {
+        const auto add_marker = [this](const QKeySequence& key, const char* menu) {
+            auto* shortcut = new QShortcut(key, this);
+            shortcut->setContext(Qt::ApplicationShortcut);
+            shortcut->setAutoRepeat(false);
+            connect(shortcut, &QShortcut::activated, this, [this, menu] {
+                if (emulation_running) {
+                    Common::Nx2Hitch::MarkMenuTrace(menu);
+                }
+            });
+        };
+        add_marker(QKeySequence{Qt::CTRL | Qt::ALT | Qt::Key_F11}, "L1 inventory");
+        add_marker(QKeySequence{Qt::CTRL | Qt::ALT | Qt::Key_F12}, "Start/Esc pause menu");
+    }
+
+    if (trace_menu || Common::OotMenuGrace::Enabled()) {
+        auto* input_trace_timer = new QTimer(this);
+        connect(input_trace_timer, &QTimer::timeout, this,
+                [this, previous = Core::HID::NpadButtonState{},
+                 grace = Common::OotMenuGrace::InputState{}]() mutable {
+                    if (!emulation_running ||
+                        QtCommon::system->GetApplicationProcessProgramID() != OcarinaOfTime) {
+                        previous = {};
+                        if (Common::OotMenuGrace::Enabled()) {
+                            grace = {};
+                            Common::OotMenuGrace::escape_pressed.store(false,
+                                                                        std::memory_order_relaxed);
+                            Common::OotMenuGrace::Publish({});
+                        }
+                        return;
+                    }
+                    auto& hid = QtCommon::system->HIDCore();
+                    Core::HID::NpadButtonState buttons{};
+                    for (const auto id : {Core::HID::NpadIdType::Player1,
+                                          Core::HID::NpadIdType::Handheld}) {
+                        const auto* controller = hid.GetEmulatedController(id);
+                        if (controller->IsConnected()) {
+                            buttons.raw |= controller->GetNpadButtons().raw;
+                        }
+                    }
+                    if (Settings::values.keyboard_enabled.GetValue()) {
+                        constexpr auto LeftArrow =
+                            static_cast<size_t>(Core::HID::KeyboardKeyIndex::LeftArrow);
+                        const auto keys = hid.GetEmulatedDevices()->GetKeyboard();
+                        if ((keys.key[LeftArrow / 8] & (1U << (LeftArrow % 8))) != 0) {
+                            buttons.left.Assign(true);
+                        }
+                    }
+                    if (buttons.l.Value() != previous.l.Value()) {
+                        Common::Nx2Hitch::MarkMenuTrace(buttons.l ? "L pressed" : "L released");
+                    }
+                    if (buttons.zl.Value() != previous.zl.Value()) {
+                        Common::Nx2Hitch::MarkMenuTrace(buttons.zl ? "ZL pressed" : "ZL released");
+                    }
+                    if (buttons.left.Value() != previous.left.Value()) {
+                        Common::Nx2Hitch::MarkMenuTrace(buttons.left ? "Left pressed" : "Left released");
+                    }
+                    const bool plus_pressed = buttons.plus && !previous.plus;
+                    const bool back_pressed = buttons.b && !previous.b;
+                    if (plus_pressed) {
+                        Common::Nx2Hitch::MarkMenuTrace("Plus pressed");
+                    }
+                    if (back_pressed) {
+                        Common::Nx2Hitch::MarkMenuTrace("B pressed");
+                    }
+                    if (Common::OotMenuGrace::Enabled()) {
+                        const bool escape = Common::OotMenuGrace::escape_pressed.exchange(
+                            false, std::memory_order_relaxed);
+                        const bool ocarina_pressed = buttons.left && !previous.left;
+                        Common::OotMenuGrace::Publish(grace.Update(
+                            Common::OotMenuGrace::Clock::now(), buttons.l.Value(),
+                            plus_pressed || escape, back_pressed, ocarina_pressed));
+                    }
+                    previous = buttons;
+                });
+        input_trace_timer->setTimerType(Qt::PreciseTimer);
+        input_trace_timer->start(8);
+    }
 
     // "What's new" once per version after an update, when nothing else is on screen: no other
     // dialog (first-launch question, update offer, restart note) and no game running.
@@ -167,6 +333,13 @@ void MainWindow::SetUpFritchiiUi() {
                             QtCommon::system->GetApplicationProcessProgramID() == OcarinaOfTime
                         ? QStringLiteral("OoT")
                         : tr("the game");
+         },
+         .missing_shader_setup = [this, show_shader_setup] {
+             if (emulation_running &&
+                 QtCommon::system->GetApplicationProcessProgramID() == OcarinaOfTime &&
+                 !UISettings::values.fritchii_shader_setup_seen.GetValue()) {
+                 show_shader_setup(true);
+             }
          }});
     connect(this, &MainWindow::EmulationStarting, gate,
             &FritchiiUi::PrecompileGate::OnEmulationStarting);

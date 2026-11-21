@@ -103,6 +103,12 @@ public:
     [[nodiscard]] bool PrecompilePending() const noexcept {
         return precompile_pending.load(std::memory_order::acquire);
     }
+    void SetPrecompileSourceMissing(bool missing) noexcept {
+        precompile_source_missing.store(missing, std::memory_order_relaxed);
+    }
+    [[nodiscard]] bool PrecompileSourceMissing() const noexcept {
+        return precompile_source_missing.load(std::memory_order_relaxed);
+    }
     /// The last precompile progress (kind 3), kept apart from the warm-ups that share the
     /// indicator. total is 0 until a preparation counts its records.
     [[nodiscard]] WarmProgress GetPrecompileProgress() const noexcept {
@@ -144,6 +150,7 @@ private:
     static constexpr int PrecompileAsked = 3;   ///< requested (counted in warm_running)
     std::atomic<int> precompile_state{PrecompileAbsent};
     std::atomic<bool> precompile_pending{};
+    std::atomic<bool> precompile_source_missing{};
     std::atomic<bool> precompile_full_speed{};
     std::atomic<size_t> precompile_done{};
     std::atomic<size_t> precompile_total{};

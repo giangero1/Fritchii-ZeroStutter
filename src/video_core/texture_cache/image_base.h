@@ -178,6 +178,8 @@ struct ImageBase {
     /// Why a drop path deleted it without a write-back (TextureCache::LostWhy), for the lost
     /// contents counter's attribution; 0 = no write-back was tried.
     u8 lost_drop_why = 0;
+    /// For the local menu trace, report the first prepare and when a pending upload clears.
+    u8 menu_trace_prepare = 0;
 
     /// Unmapped images (TextureCache::UnmapGPUMemory): the frame + 1 at which an unmap of its GPU
     /// memory flagged it Remapped (0 = none did, or it was found again since) and its device

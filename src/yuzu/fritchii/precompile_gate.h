@@ -30,6 +30,7 @@ struct PrecompileHooks {
     std::function<void()> pause;           ///< hold the game (MainWindow::OnPauseGame)
     std::function<void()> resume;          ///< let it run (MainWindow::OnStartGame)
     std::function<QString()> game_name;    ///< "OoT", or "the game"
+    std::function<void()> missing_shader_setup;
 };
 
 /// Fritchii's "Preparing shaders" screen (EDEN_NX2_PRECOMPILE). Right after a game has loaded, it
